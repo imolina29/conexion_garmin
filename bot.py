@@ -83,6 +83,8 @@ class ConversationHistory:
         self._messages.append({"role": role, "content": content})
         if len(self._messages) > self._max:
             self._messages = self._messages[-self._max:]
+        while self._messages and self._messages[0]["role"] == "assistant":
+            self._messages.pop(0)
 
     def get_messages(self) -> list[dict]:
         return list(self._messages)
@@ -113,6 +115,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not update.message or not update.message.text:
         return
 
+    if claude_client is None:
+        await update.message.reply_text("Error: el bot no está configurado correctamente (falta API key).")
+        return
+
     user_text = update.message.text
 
     synced = run_sync_safe()
@@ -134,11 +140,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             messages=messages,
         )
         reply = response.content[0].text
+        conversation.add("assistant", reply)
     except Exception as e:
         logger.error("Claude API error: %s", e)
         reply = "Hubo un error procesando tu mensaje, intenta de nuevo."
 
-    conversation.add("assistant", reply)
     await update.message.reply_text(reply)
 
 
