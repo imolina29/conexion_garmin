@@ -1,0 +1,9 @@
+.venv/
+.env
+data/raw/
+data/.last_sync
+data/.garmin_session
+data/.session_synced
+__pycache__/
+*.pyc
+.superpowers/
