@@ -7,7 +7,7 @@ import os
 import sys
 import tempfile
 import time
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -57,8 +57,7 @@ def create_client() -> Garmin:
     password = os.getenv("GARMIN_PASSWORD")
 
     if not email or not password:
-        print("Error: GARMIN_EMAIL y GARMIN_PASSWORD deben estar en .env")
-        sys.exit(1)
+        raise ValueError("GARMIN_EMAIL y GARMIN_PASSWORD deben estar en .env")
 
     client = Garmin(email, password)
     token_path = str(TOKEN_STORE)
@@ -67,11 +66,10 @@ def create_client() -> Garmin:
         client.login(tokenstore=token_path)
     except Exception:
         print("Token expirado o no existe, haciendo login completo...")
-        try:
-            client.login(tokenstore=token_path)
-        except Exception as e:
-            print(f"Error de autenticación: {e}")
-            sys.exit(1)
+        TOKEN_STORE.parent.mkdir(parents=True, exist_ok=True)
+        if Path(token_path).exists():
+            Path(token_path).unlink()
+        client.login(tokenstore=token_path)
 
     return client
 
@@ -88,7 +86,7 @@ def save_last_sync() -> None:
     LAST_SYNC_FILE.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=LAST_SYNC_FILE.parent, suffix=".tmp")
     with os.fdopen(fd, "w") as f:
-        f.write(datetime.now(datetime.timezone.utc).isoformat())
+        f.write(datetime.now(tz=timezone.utc).isoformat())
     os.replace(tmp, LAST_SYNC_FILE)
 
 
