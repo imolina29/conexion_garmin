@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Telegram bot that acts as a Garmin training coach powered by Claude."""
+"""Telegram bot that acts as a Garmin training coach powered by Gemini."""
 
 import logging
 import os
 from datetime import date, timedelta
 from pathlib import Path
 
-import anthropic
 from dotenv import load_dotenv
+from google import genai
 from telegram import Update
 from telegram.ext import Application, ContextTypes, MessageHandler, filters
 
@@ -64,6 +64,13 @@ Tu personalidad:
 
 {garmin_snapshot}
 
+## Perfil del usuario
+- Entre semana entrena en gym: fuerza + caminadora (cinta de correr)
+- Fines de semana corre en la calle
+- Las actividades "Entrenamiento en cinta" son en caminadora del gym
+- Las actividades de fuerza en Garmin no registran bien los nombres de ejercicios — si el usuario te dice qué hizo (ej: "hoy fue pecho"), úsalo para interpretar los datos de esa sesión
+- El usuario puede decirte antes de entrenar qué planea hacer — recuérdalo para cuando pregunte después cómo le fue
+
 ## Instrucciones
 - Responde basándote en los datos reales mostrados arriba
 - Si el usuario pregunta por una métrica, explica qué es Y qué significa su valor específico
@@ -71,7 +78,8 @@ Tu personalidad:
 - Si ves monotonía en entrenamientos (mismo tipo/ritmo/duración repetido), sugiérelo
 - Si hay señales de sobreentrenamiento (HRV bajo + Training Readiness bajo + FC reposo alta), alerta
 - Mantén respuestas concisas pero completas — no más de 300 palabras por respuesta
-- No inventes datos que no estén en el snapshot"""
+- No inventes datos que no estén en el snapshot
+- Cuando el usuario te cuente su plan de entrenamiento, confirma y da algún tip breve basado en sus datos actuales (ej: si su Training Readiness está bajo, sugiérelo)"""
 
 
 class ConversationHistory:
@@ -83,7 +91,7 @@ class ConversationHistory:
         self._messages.append({"role": role, "content": content})
         if len(self._messages) > self._max:
             self._messages = self._messages[-self._max:]
-        while self._messages and self._messages[0]["role"] == "assistant":
+        while self._messages and self._messages[0]["role"] == "model":
             self._messages.pop(0)
 
     def get_messages(self) -> list[dict]:
@@ -94,7 +102,7 @@ class ConversationHistory:
 
 
 conversation = ConversationHistory(max_messages=20)
-claude_client: anthropic.Anthropic | None = None
+gemini_client: genai.Client | None = None
 
 
 def run_sync_safe() -> bool:
@@ -115,7 +123,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not update.message or not update.message.text:
         return
 
-    if claude_client is None:
+    if gemini_client is None:
         await update.message.reply_text("Error: el bot no está configurado correctamente (falta API key).")
         return
 
@@ -130,20 +138,35 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     system_prompt = build_system_prompt(snapshot)
 
     conversation.add("user", user_text)
-    messages = conversation.get_messages()
 
-    try:
-        response = claude_client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=1024,
-            system=system_prompt,
-            messages=messages,
-        )
-        reply = response.content[0].text
-        conversation.add("assistant", reply)
-    except Exception as e:
-        logger.error("Claude API error: %s", e)
-        reply = "Hubo un error procesando tu mensaje, intenta de nuevo."
+    gemini_messages = []
+    for msg in conversation.get_messages():
+        role = "model" if msg["role"] == "model" else "user"
+        gemini_messages.append({"role": role, "parts": [{"text": msg["content"]}]})
+
+    models = ["gemini-3.1-flash-lite", "gemini-flash-lite-latest", "gemini-3-flash-preview"]
+    reply = None
+    for model_name in models:
+        try:
+            response = gemini_client.models.generate_content(
+                model=model_name,
+                contents=gemini_messages,
+                config={
+                    "system_instruction": system_prompt,
+                    "max_output_tokens": 1024,
+                },
+            )
+            reply = response.text
+            if reply:
+                logger.info("Response from %s (%d chars)", model_name, len(reply))
+                conversation.add("model", reply)
+                break
+        except Exception as e:
+            logger.warning("Model %s failed: %s", model_name, str(e)[:100])
+            continue
+
+    if not reply:
+        reply = "Todos los modelos están con alta demanda en este momento. Intenta de nuevo en unos minutos."
 
     await update.message.reply_text(reply)
 
@@ -152,17 +175,17 @@ def main() -> None:
     load_dotenv()
 
     token = os.getenv("TELEGRAM_BOT_TOKEN")
-    api_key = os.getenv("ANTHROPIC_API_KEY")
+    api_key = os.getenv("GEMINI_API_KEY")
 
     if not token:
         print("Error: TELEGRAM_BOT_TOKEN debe estar en .env")
         return
     if not api_key:
-        print("Error: ANTHROPIC_API_KEY debe estar en .env")
+        print("Error: GEMINI_API_KEY debe estar en .env")
         return
 
-    global claude_client
-    claude_client = anthropic.Anthropic(api_key=api_key)
+    global gemini_client
+    gemini_client = genai.Client(api_key=api_key)
 
     logging.basicConfig(
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",

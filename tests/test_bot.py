@@ -23,27 +23,27 @@ def test_conversation_history_bounded():
     history = ConversationHistory(max_messages=10)
     for i in range(15):
         history.add("user", f"message {i}")
-        history.add("assistant", f"response {i}")
+        history.add("model", f"response {i}")
     messages = history.get_messages()
     assert len(messages) == 10
     assert messages[0]["content"] == "message 10"
 
 
-def test_conversation_history_to_claude_format():
+def test_conversation_history_to_gemini_format():
     history = ConversationHistory(max_messages=10)
     history.add("user", "hola")
-    history.add("assistant", "hola, ¿cómo te fue?")
+    history.add("model", "hola, ¿cómo te fue?")
     messages = history.get_messages()
     assert messages[0] == {"role": "user", "content": "hola"}
-    assert messages[1] == {"role": "assistant", "content": "hola, ¿cómo te fue?"}
+    assert messages[1] == {"role": "model", "content": "hola, ¿cómo te fue?"}
 
 
-def test_conversation_history_truncation_drops_leading_assistant():
+def test_conversation_history_truncation_drops_leading_model():
     history = ConversationHistory(max_messages=3)
     history.add("user", "a")
-    history.add("assistant", "b")
+    history.add("model", "b")
     history.add("user", "c")
-    history.add("assistant", "d")
+    history.add("model", "d")
     messages = history.get_messages()
     assert messages[0]["role"] == "user"
 
