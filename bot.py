@@ -1,25 +1,23 @@
 #!/usr/bin/env python3
-"""Telegram bot that acts as a Garmin training coach powered by Gemini."""
+"""Multi-user Telegram bot — Garmin training coach powered by Gemini."""
 
 import logging
 import os
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
 from google import genai
 from telegram import Update
-from telegram.ext import Application, ContextTypes, MessageHandler, filters
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 from analysis import build_context_snapshot
-from sync import create_client, sync_activities, sync_daily_stats, save_last_sync
-
-DATA_DIR = Path(__file__).parent / "data"
-RAW_DIR = DATA_DIR / "raw"
-ACTIVITIES_DIR = RAW_DIR / "activities"
-STATS_DIR = RAW_DIR / "stats"
+from sync import create_client, sync_activities, sync_daily_stats
+from users import UserManager
 
 logger = logging.getLogger(__name__)
+
+SYNC_COOLDOWN_MINUTES = 15
 
 METRIC_REFERENCE = """
 ## Referencia de métricas Garmin
@@ -47,16 +45,28 @@ METRIC_REFERENCE = """
 """
 
 
-def build_system_prompt(garmin_snapshot: str) -> str:
+def build_system_prompt(garmin_snapshot: str, user_profile: str) -> str:
+    if user_profile:
+        profile_section = user_profile
+    else:
+        profile_section = (
+            "No se ha configurado un perfil específico. "
+            "Pregunta al usuario sobre su rutina para poder dar mejores recomendaciones, "
+            "o sugiérele que use /perfil para configurarlo."
+        )
+
     return f"""Eres un coach de entrenamiento personal inteligente que analiza datos reales de un reloj Garmin.
 
 Tu personalidad:
 - Hablas en español, claro y directo
-- Eres educativo: no solo das números, explicas qué significan y por qué importan
-- Eres motivador pero honesto — si algo necesita atención, lo dices
-- Cuando el usuario pregunta algo, usas SUS datos para responder, no genéricos
-- Usas comparaciones concretas ("tu ritmo mejoró 30 seg/km en 2 semanas")
-- Si detectas algo preocupante (HRV muy bajo, Training Readiness <20 varios días), lo mencionas
+- Eres CRÍTICO y OBJETIVO — tu trabajo no es hacer sentir bien al usuario, es ayudarlo a mejorar
+- No adornes los resultados: si el entrenamiento fue mediocre, dilo. Si no hubo progreso, señálalo
+- Eres como un coach profesional exigente: reconoces lo bueno pero nunca dejas pasar lo mejorable
+- Cuando los datos muestran estancamiento, falta de intensidad o inconsistencia, lo dices sin rodeos
+- Usas SUS datos reales para responder, nunca respuestas genéricas
+- Usas comparaciones concretas con números ("tu ritmo empeoró 15 seg/km vs la semana pasada")
+- Si detectas algo preocupante (HRV muy bajo, Training Readiness <20, FC reposo subiendo), lo marcas como alerta
+- Da recomendaciones accionables y específicas, no generalidades como "descansa más" — di exactamente qué hacer
 
 {METRIC_REFERENCE}
 
@@ -65,21 +75,23 @@ Tu personalidad:
 {garmin_snapshot}
 
 ## Perfil del usuario
-- Entre semana entrena en gym: fuerza + caminadora (cinta de correr)
-- Fines de semana corre en la calle
-- Las actividades "Entrenamiento en cinta" son en caminadora del gym
+{profile_section}
+
+## Notas sobre datos Garmin
 - Las actividades de fuerza en Garmin no registran bien los nombres de ejercicios — si el usuario te dice qué hizo (ej: "hoy fue pecho"), úsalo para interpretar los datos de esa sesión
 - El usuario puede decirte antes de entrenar qué planea hacer — recuérdalo para cuando pregunte después cómo le fue
 
 ## Instrucciones
 - Responde basándote en los datos reales mostrados arriba
 - Si el usuario pregunta por una métrica, explica qué es Y qué significa su valor específico
-- Detecta tendencias: ¿está mejorando, estancado, o empeorando?
-- Si ves monotonía en entrenamientos (mismo tipo/ritmo/duración repetido), sugiérelo
-- Si hay señales de sobreentrenamiento (HRV bajo + Training Readiness bajo + FC reposo alta), alerta
-- Mantén respuestas concisas pero completas — no más de 300 palabras por respuesta
+- Detecta tendencias: ¿está mejorando, estancado, o empeorando? Sé explícito sobre cuál es
+- Si ves monotonía en entrenamientos (mismo tipo/ritmo/duración repetido), confronta al usuario: "llevas 3 semanas corriendo al mismo ritmo, no estás progresando"
+- Si hay señales de sobreentrenamiento (HRV bajo + Training Readiness bajo + FC reposo alta), alerta con urgencia
+- Si el usuario dice que va a entrenar fuerte pero sus métricas dicen que debería descansar, díselo directamente — no le des permiso de sobreentrenarse
+- Mantén respuestas concisas pero contundentes — no más de 300 palabras por respuesta
 - No inventes datos que no estén en el snapshot
-- Cuando el usuario te cuente su plan de entrenamiento, confirma y da algún tip breve basado en sus datos actuales (ej: si su Training Readiness está bajo, sugiérelo)"""
+- Cuando el usuario te cuente su plan de entrenamiento, evalúalo críticamente contra sus datos: ¿es realista? ¿se alinea con sus métricas actuales? ¿va a generar progreso o es más de lo mismo?
+- NUNCA respondas solo con "buen trabajo" o "sigue así" — siempre agrega qué podría ser mejor"""
 
 
 class ConversationHistory:
@@ -101,41 +113,179 @@ class ConversationHistory:
         self._messages.clear()
 
 
-conversation = ConversationHistory(max_messages=20)
+conversations: dict[int, ConversationHistory] = {}
+registration_state: dict[int, dict] = {}
+last_sync: dict[int, datetime] = {}
+user_manager: UserManager | None = None
 gemini_client: genai.Client | None = None
 
 
-def run_sync_safe() -> bool:
+def run_sync_safe(telegram_id: int) -> bool:
+    now = datetime.now(tz=timezone.utc)
+    if telegram_id in last_sync:
+        elapsed = (now - last_sync[telegram_id]).total_seconds() / 60
+        if elapsed < SYNC_COOLDOWN_MINUTES:
+            return True
+
     try:
-        client = create_client()
+        creds = user_manager.get_garmin_credentials(telegram_id)
+        if not creds:
+            return False
+        email, password = creds
+
+        client = create_client(email, password, user_manager.token_store_path(telegram_id))
         today = date.today().isoformat()
         start = (date.today() - timedelta(days=2)).isoformat()
-        sync_activities(client, start, today)
-        sync_daily_stats(client, start, today)
-        save_last_sync()
+
+        sync_activities(client, start, today, user_manager.activities_dir(telegram_id))
+        sync_daily_stats(client, start, today, user_manager.stats_dir(telegram_id))
+
+        last_sync[telegram_id] = now
         return True
     except Exception as e:
-        logger.warning("Sync failed: %s", e)
+        logger.warning("Sync failed for user %d: %s", telegram_id, e)
         return False
+
+
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    if user_manager.user_exists(user_id):
+        await update.message.reply_text(
+            "Ya estás registrado. Escríbeme directamente para analizar tu entrenamiento.\n"
+            "Usa /perfil para actualizar tu perfil de entrenamiento."
+        )
+        return
+
+    registration_state[user_id] = {"step": "awaiting_email"}
+    await update.message.reply_text(
+        "¡Hola! Soy tu coach de entrenamiento personal.\n\n"
+        "Para empezar necesito conectarme a tu cuenta de Garmin Connect.\n\n"
+        "Envíame tu email de Garmin Connect:"
+    )
+
+
+async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    if not user_manager.user_exists(user_id):
+        await update.message.reply_text("Primero regístrate con /start")
+        return
+
+    registration_state[user_id] = {"step": "awaiting_profile", "update_only": True}
+    await update.message.reply_text(
+        "Cuéntame sobre tu entrenamiento en un solo mensaje:\n"
+        "- ¿Qué tipo de ejercicio haces?\n"
+        "- ¿Con qué frecuencia?\n"
+        "- ¿Tienes algún objetivo específico?"
+    )
+
+
+async def handle_registration(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    state = registration_state.get(user_id)
+    if not state:
+        return
+
+    text = update.message.text
+    step = state["step"]
+    chat_id = update.effective_chat.id
+
+    if step == "awaiting_email":
+        state["email"] = text.strip()
+        state["step"] = "awaiting_password"
+        await update.message.reply_text(
+            "Ahora envíame tu contraseña de Garmin Connect.\n"
+            "🔒 Será cifrada y almacenada de forma segura."
+        )
+
+    elif step == "awaiting_password":
+        state["password"] = text
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+
+        await context.bot.send_message(chat_id=chat_id, text="Verificando conexión con Garmin... ⏳")
+
+        try:
+            token_store = user_manager.token_store_path(user_id)
+            token_store.parent.mkdir(parents=True, exist_ok=True)
+            create_client(state["email"], state["password"], token_store)
+
+            user_manager.create_user(user_id, state["email"], state["password"])
+
+            state["step"] = "awaiting_profile"
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=(
+                    "✅ Conectado a Garmin!\n\n"
+                    "Ahora cuéntame sobre tu entrenamiento en un solo mensaje:\n"
+                    "- ¿Qué tipo de ejercicio haces? (gym, correr, ambos, etc.)\n"
+                    "- ¿Con qué frecuencia?\n"
+                    "- ¿Tienes algún objetivo específico?"
+                ),
+            )
+        except Exception as e:
+            logger.warning("Garmin auth failed for user %d: %s", user_id, e)
+            del registration_state[user_id]
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="❌ No pude conectar con Garmin. Verifica tu email y contraseña e intenta de nuevo con /start",
+            )
+
+    elif step == "awaiting_profile":
+        user_manager.update_profile(user_id, text)
+        del registration_state[user_id]
+        if state.get("update_only"):
+            await update.message.reply_text("✅ Perfil actualizado.")
+        else:
+            limit = user_manager.check_rate_limit(user_id)[1]
+            await update.message.reply_text(
+                f"✅ ¡Listo! Tu perfil está configurado.\n\n"
+                f"Ya puedes preguntarme lo que quieras sobre tu entrenamiento.\n"
+                f"Tu límite diario es de {limit} mensajes."
+            )
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message or not update.message.text:
         return
 
+    user_id = update.effective_user.id
+
+    if user_id in registration_state:
+        await handle_registration(update, context)
+        return
+
+    if not user_manager.user_exists(user_id):
+        await update.message.reply_text("No estás registrado. Usa /start para comenzar.")
+        return
+
     if gemini_client is None:
-        await update.message.reply_text("Error: el bot no está configurado correctamente (falta API key).")
+        await update.message.reply_text("Error: el bot no está configurado correctamente.")
+        return
+
+    allowed, remaining = user_manager.check_rate_limit(user_id)
+    if not allowed:
+        await update.message.reply_text("Has alcanzado tu límite diario de mensajes. Vuelve mañana.")
         return
 
     user_text = update.message.text
 
-    synced = run_sync_safe()
-    snapshot = build_context_snapshot(ACTIVITIES_DIR, STATS_DIR, days=30)
+    activities_dir = user_manager.activities_dir(user_id)
+    stats_dir = user_manager.stats_dir(user_id)
+
+    synced = run_sync_safe(user_id)
+    snapshot = build_context_snapshot(activities_dir, stats_dir, days=30)
 
     if not synced:
-        snapshot = "⚠️ Nota: no se pudieron actualizar los datos, usando última sincronización disponible.\n\n" + snapshot
+        snapshot = "⚠️ No se pudieron actualizar los datos, usando última sincronización disponible.\n\n" + snapshot
 
-    system_prompt = build_system_prompt(snapshot)
+    profile = user_manager.get_profile(user_id)
+    system_prompt = build_system_prompt(snapshot, profile)
+
+    if user_id not in conversations:
+        conversations[user_id] = ConversationHistory(max_messages=20)
+    conversation = conversations[user_id]
 
     conversation.add("user", user_text)
 
@@ -158,7 +308,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             )
             reply = response.text
             if reply:
-                logger.info("Response from %s (%d chars)", model_name, len(reply))
+                logger.info("Response from %s for user %d (%d chars)", model_name, user_id, len(reply))
                 conversation.add("model", reply)
                 break
         except Exception as e:
@@ -166,7 +316,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             continue
 
     if not reply:
-        reply = "Todos los modelos están con alta demanda en este momento. Intenta de nuevo en unos minutos."
+        reply = "Todos los modelos están con alta demanda. Intenta de nuevo en unos minutos."
+    else:
+        user_manager.increment_usage(user_id)
+        remaining -= 1
+
+    if 0 < remaining <= 5:
+        reply += f"\n\n📊 Te quedan {remaining} mensajes hoy."
 
     await update.message.reply_text(reply)
 
@@ -176,6 +332,7 @@ def main() -> None:
 
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     api_key = os.getenv("GEMINI_API_KEY")
+    encryption_key = os.getenv("ENCRYPTION_KEY")
 
     if not token:
         print("Error: TELEGRAM_BOT_TOKEN debe estar en .env")
@@ -184,8 +341,9 @@ def main() -> None:
         print("Error: GEMINI_API_KEY debe estar en .env")
         return
 
-    global gemini_client
+    global gemini_client, user_manager
     gemini_client = genai.Client(api_key=api_key)
+    user_manager = UserManager(encryption_key=encryption_key)
 
     logging.basicConfig(
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -193,9 +351,11 @@ def main() -> None:
     )
 
     app = Application.builder().token(token).build()
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("perfil", cmd_profile))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    print("Bot iniciado. Esperando mensajes...")
+    print("Bot multi-usuario iniciado. Esperando mensajes...")
     app.run_polling()
 
 
