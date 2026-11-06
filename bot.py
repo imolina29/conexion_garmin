@@ -135,7 +135,10 @@ def run_sync_safe(telegram_id: int) -> bool:
 
         client = create_client(email, password, user_manager.token_store_path(telegram_id))
         today = date.today().isoformat()
-        start = (date.today() - timedelta(days=2)).isoformat()
+        activities_dir = user_manager.activities_dir(telegram_id)
+        is_first_sync = not any(activities_dir.glob("*.json"))
+        lookback = 30 if is_first_sync else 2
+        start = (date.today() - timedelta(days=lookback)).isoformat()
 
         sync_activities(client, start, today, user_manager.activities_dir(telegram_id))
         sync_daily_stats(client, start, today, user_manager.stats_dir(telegram_id))
