@@ -137,7 +137,7 @@ def run_sync_safe(telegram_id: int) -> bool:
         today = date.today().isoformat()
         activities_dir = user_manager.activities_dir(telegram_id)
         is_first_sync = not any(activities_dir.glob("*.json"))
-        lookback = 30 if is_first_sync else 2
+        lookback = 90 if is_first_sync else 2
         start = (date.today() - timedelta(days=lookback)).isoformat()
 
         sync_activities(client, start, today, user_manager.activities_dir(telegram_id))
@@ -278,7 +278,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     stats_dir = user_manager.stats_dir(user_id)
 
     synced = run_sync_safe(user_id)
-    snapshot = build_context_snapshot(activities_dir, stats_dir, days=30)
+    snapshot = build_context_snapshot(activities_dir, stats_dir, days=90)
 
     if not synced:
         snapshot = "⚠️ No se pudieron actualizar los datos, usando última sincronización disponible.\n\n" + snapshot
