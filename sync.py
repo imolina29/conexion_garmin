@@ -51,22 +51,24 @@ def api_call_with_retry(func, *args, **kwargs):
             time.sleep(RETRY_DELAY * (attempt + 1))
 
 
-def create_client() -> Garmin:
-    load_dotenv()
-    email = os.getenv("GARMIN_EMAIL")
-    password = os.getenv("GARMIN_PASSWORD")
+def create_client(email: str | None = None, password: str | None = None, token_store: Path | None = None) -> Garmin:
+    if not email or not password:
+        load_dotenv()
+        email = email or os.getenv("GARMIN_EMAIL")
+        password = password or os.getenv("GARMIN_PASSWORD")
 
     if not email or not password:
         raise ValueError("GARMIN_EMAIL y GARMIN_PASSWORD deben estar en .env")
 
     client = Garmin(email, password)
-    token_path = str(TOKEN_STORE)
+    store = token_store or TOKEN_STORE
+    token_path = str(store)
 
     try:
         client.login(tokenstore=token_path)
     except Exception:
         print("Token expirado o no existe, haciendo login completo...")
-        TOKEN_STORE.parent.mkdir(parents=True, exist_ok=True)
+        store.parent.mkdir(parents=True, exist_ok=True)
         if Path(token_path).exists():
             Path(token_path).unlink()
         client.login(tokenstore=token_path)
@@ -125,8 +127,9 @@ def fetch_activity_details(client: Garmin, activity_id: str, type_key: str) -> d
     return result
 
 
-def sync_activities(client: Garmin, start_date: str, end_date: str) -> int:
-    ACTIVITIES_DIR.mkdir(parents=True, exist_ok=True)
+def sync_activities(client: Garmin, start_date: str, end_date: str, activities_dir: Path | None = None) -> int:
+    target_dir = activities_dir or ACTIVITIES_DIR
+    target_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Buscando actividades del {start_date} al {end_date}...")
     activities = api_call_with_retry(client.get_activities_by_date, start_date, end_date)
@@ -138,7 +141,7 @@ def sync_activities(client: Garmin, start_date: str, end_date: str) -> int:
     new_count = 0
     for activity in activities:
         activity_id = str(activity.get("activityId"))
-        file_path = ACTIVITIES_DIR / f"{activity_id}.json"
+        file_path = target_dir / f"{activity_id}.json"
 
         if file_path.exists():
             continue
@@ -156,8 +159,9 @@ def sync_activities(client: Garmin, start_date: str, end_date: str) -> int:
     return new_count
 
 
-def sync_daily_stats(client: Garmin, start_date: str, end_date: str) -> int:
-    STATS_DIR.mkdir(parents=True, exist_ok=True)
+def sync_daily_stats(client: Garmin, start_date: str, end_date: str, stats_dir: Path | None = None) -> int:
+    target_dir = stats_dir or STATS_DIR
+    target_dir.mkdir(parents=True, exist_ok=True)
 
     start = date.fromisoformat(start_date)
     end = date.fromisoformat(end_date)
@@ -167,7 +171,7 @@ def sync_daily_stats(client: Garmin, start_date: str, end_date: str) -> int:
     current = start
     while current <= end:
         date_str = current.isoformat()
-        file_path = STATS_DIR / f"{date_str}.json"
+        file_path = target_dir / f"{date_str}.json"
 
         if file_path.exists() and current != today:
             current += timedelta(days=1)

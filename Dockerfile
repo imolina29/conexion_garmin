@@ -5,7 +5,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY sync.py analysis.py bot.py ./
+COPY sync.py analysis.py bot.py users.py ./
 
 RUN mkdir -p data/raw/activities data/raw/stats
 
