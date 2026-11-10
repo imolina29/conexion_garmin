@@ -13,7 +13,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 from analysis import build_context_snapshot
-from calendar_server import next_monday, parse_plan_json, start_calendar_server
+from calendar_server import parse_plan_json, plan_start_date, start_calendar_server
 from sync import create_client, sync_activities, sync_daily_stats
 from users import UserManager
 
@@ -347,7 +347,7 @@ async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     display_text = re.sub(r"```json\s*\{.*?\}\s*```", "", reply, flags=re.DOTALL).strip()
 
     if plan_data and plan_data.get("sessions"):
-        plan_data["valid_from"] = next_monday()
+        plan_data["valid_from"] = plan_start_date()
         plan_data["created_at"] = datetime.now(tz=timezone.utc).isoformat()
         user_manager.save_plan(user_id, plan_data)
 
