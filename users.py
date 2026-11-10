@@ -2,6 +2,7 @@
 
 import json
 import logging
+import uuid
 from datetime import date
 from pathlib import Path
 
@@ -113,3 +114,40 @@ class UserManager:
         usage = data.get("daily_usage", {})
         data["daily_usage"] = {today: usage.get(today, 0) + 1}
         self._save_raw(telegram_id, data)
+
+    def get_calendar_token(self, telegram_id: int) -> str | None:
+        data = self._load_raw(telegram_id)
+        if not data:
+            return None
+        token = data.get("calendar_token")
+        if not token:
+            token = uuid.uuid4().hex
+            data["calendar_token"] = token
+            self._save_raw(telegram_id, data)
+        return token
+
+    def find_user_by_calendar_token(self, token: str) -> int | None:
+        for user_dir in self._users_dir.iterdir():
+            if not user_dir.is_dir():
+                continue
+            config = user_dir / "config.json"
+            if not config.exists():
+                continue
+            with open(config) as f:
+                data = json.load(f)
+            if data.get("calendar_token") == token:
+                return int(user_dir.name)
+        return None
+
+    def save_plan(self, telegram_id: int, plan: dict) -> None:
+        path = self._user_dir(telegram_id) / "plan.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w") as f:
+            json.dump(plan, f, indent=2, ensure_ascii=False)
+
+    def get_plan(self, telegram_id: int) -> dict | None:
+        path = self._user_dir(telegram_id) / "plan.json"
+        if not path.exists():
+            return None
+        with open(path) as f:
+            return json.load(f)
