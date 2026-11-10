@@ -103,3 +103,43 @@ def test_no_encryption_stores_plaintext(tmp_path):
     raw = json.loads((tmp_path / "123" / "config.json").read_text())
     assert raw["garmin_email"] == "test@mail.com"
     assert raw["garmin_password"] == "secret"
+
+
+def test_calendar_token_generated_on_first_access(tmp_path):
+    mgr = UserManager(users_dir=tmp_path)
+    mgr.create_user(123, "a@b.com", "p")
+
+    token = mgr.get_calendar_token(123)
+    assert token is not None
+    assert len(token) == 32
+    assert mgr.get_calendar_token(123) == token
+
+
+def test_find_user_by_calendar_token(tmp_path):
+    mgr = UserManager(users_dir=tmp_path)
+    mgr.create_user(111, "a@b.com", "p")
+    mgr.create_user(222, "c@d.com", "p")
+
+    token_111 = mgr.get_calendar_token(111)
+    token_222 = mgr.get_calendar_token(222)
+
+    assert mgr.find_user_by_calendar_token(token_111) == 111
+    assert mgr.find_user_by_calendar_token(token_222) == 222
+    assert mgr.find_user_by_calendar_token("nonexistent") is None
+
+
+def test_save_and_get_plan(tmp_path):
+    mgr = UserManager(users_dir=tmp_path)
+    mgr.create_user(123, "a@b.com", "p")
+
+    assert mgr.get_plan(123) is None
+
+    plan = {
+        "sessions": [{"weekday": 0, "time": "18:00", "duration_minutes": 60, "title": "Pecho"}],
+        "weeks": 4,
+        "valid_from": "2026-11-16",
+    }
+    mgr.save_plan(123, plan)
+    loaded = mgr.get_plan(123)
+    assert loaded["sessions"][0]["title"] == "Pecho"
+    assert loaded["weeks"] == 4

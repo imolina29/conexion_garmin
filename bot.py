@@ -3,6 +3,7 @@
 
 import logging
 import os
+import re
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 from analysis import build_context_snapshot
+from calendar_server import next_monday, parse_plan_json, start_calendar_server
 from sync import create_client, sync_activities, sync_daily_stats
 from users import UserManager
 
@@ -249,6 +251,131 @@ async def handle_registration(update: Update, context: ContextTypes.DEFAULT_TYPE
             )
 
 
+PLAN_PROMPT = """Genera un plan de entrenamiento semanal para este usuario.
+
+Basándote en:
+1. Sus datos de Garmin (actividades recientes, métricas de recuperación)
+2. Su perfil de entrenamiento
+3. La conversación reciente (si discutieron preferencias o ajustes)
+
+IMPORTANTE: Responde con DOS partes separadas:
+
+PARTE 1 — Tu respuesta normal en español explicando el plan al usuario. Sé crítico y específico como siempre.
+
+PARTE 2 — Al final, incluye un bloque JSON con este formato EXACTO (sin comentarios dentro del JSON):
+
+```json
+{
+  "sessions": [
+    {
+      "weekday": 0,
+      "time": "18:00",
+      "duration_minutes": 60,
+      "title": "Título corto",
+      "description": "Descripción detallada de ejercicios"
+    }
+  ],
+  "weeks": 4
+}
+```
+
+Reglas para el JSON:
+- weekday: 0=Lunes, 1=Martes, 2=Miércoles, 3=Jueves, 4=Viernes, 5=Sábado, 6=Domingo
+- time: hora en formato HH:MM (24h)
+- duration_minutes: duración estimada en minutos
+- title: título corto para el calendario (ej: "Pecho + Cardio", "Carrera 5K")
+- description: detalle de ejercicios, series, repeticiones
+- weeks: número de semanas que dura el plan (típico: 4)
+- Incluye días de descanso activo si aplica
+"""
+
+
+async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    if not user_manager.user_exists(user_id):
+        await update.message.reply_text("Primero regístrate con /start")
+        return
+
+    if gemini_client is None:
+        await update.message.reply_text("Error: bot no configurado.")
+        return
+
+    await update.message.reply_text("Generando tu plan semanal... ⏳")
+
+    activities_dir = user_manager.activities_dir(user_id)
+    stats_dir = user_manager.stats_dir(user_id)
+
+    run_sync_safe(user_id)
+    snapshot = build_context_snapshot(activities_dir, stats_dir, days=90)
+    profile = user_manager.get_profile(user_id)
+    system_prompt = build_system_prompt(snapshot, profile)
+
+    if user_id not in conversations:
+        conversations[user_id] = ConversationHistory(max_messages=20)
+    conversation = conversations[user_id]
+
+    conversation.add("user", "/plan — genera mi plan semanal de entrenamiento")
+
+    gemini_messages = []
+    for msg in conversation.get_messages():
+        role = "model" if msg["role"] == "model" else "user"
+        gemini_messages.append({"role": role, "parts": [{"text": msg["content"]}]})
+
+    full_system = system_prompt + "\n\n" + PLAN_PROMPT
+
+    models = ["gemini-3.1-flash-lite", "gemini-flash-lite-latest", "gemini-3-flash-preview"]
+    reply = None
+    for model_name in models:
+        try:
+            response = gemini_client.models.generate_content(
+                model=model_name,
+                contents=gemini_messages,
+                config={"system_instruction": full_system, "max_output_tokens": 2048},
+            )
+            reply = response.text
+            if reply:
+                break
+        except Exception as e:
+            logger.warning("Model %s failed for plan: %s", model_name, str(e)[:100])
+            continue
+
+    if not reply:
+        await update.message.reply_text("No pude generar el plan ahora. Intenta de nuevo en unos minutos.")
+        return
+
+    plan_data = parse_plan_json(reply)
+    display_text = re.sub(r"```json\s*\{.*?\}\s*```", "", reply, flags=re.DOTALL).strip()
+
+    if plan_data and plan_data.get("sessions"):
+        plan_data["valid_from"] = next_monday()
+        plan_data["created_at"] = datetime.now(tz=timezone.utc).isoformat()
+        user_manager.save_plan(user_id, plan_data)
+
+        token = user_manager.get_calendar_token(user_id)
+        base_url = os.getenv("CALENDAR_BASE_URL", "").rstrip("/")
+
+        if base_url:
+            cal_url = f"{base_url}/cal/{token}.ics"
+            display_text += (
+                f"\n\n📅 **Tu calendario está listo:**\n"
+                f"`{cal_url}`\n\n"
+                f"Suscríbete desde iPhone:\n"
+                f"Ajustes → Calendario → Cuentas → Añadir cuenta → Otra → "
+                f"Añadir calendario suscrito → pega la URL"
+            )
+        else:
+            display_text += "\n\n📅 Plan guardado. El calendario estará disponible cuando se configure la URL pública."
+
+    conversation.add("model", display_text)
+    user_manager.increment_usage(user_id)
+
+    if len(display_text) > 4096:
+        for i in range(0, len(display_text), 4096):
+            await update.message.reply_text(display_text[i : i + 4096])
+    else:
+        await update.message.reply_text(display_text)
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message or not update.message.text:
         return
@@ -353,12 +480,16 @@ def main() -> None:
         level=logging.INFO,
     )
 
+    cal_port = int(os.getenv("PORT", "8080"))
+    start_calendar_server(user_manager, port=cal_port)
+
     app = Application.builder().token(token).build()
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("perfil", cmd_profile))
+    app.add_handler(CommandHandler("plan", cmd_plan))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    print("Bot multi-usuario iniciado. Esperando mensajes...")
+    print(f"Bot multi-usuario iniciado. Calendario en puerto {cal_port}. Esperando mensajes...")
     app.run_polling()
 
 
