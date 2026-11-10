@@ -280,13 +280,15 @@ PARTE 2 — Al final, incluye un bloque JSON con este formato EXACTO (sin coment
 ```
 
 Reglas para el JSON:
+- OBLIGATORIO: Incluir EXACTAMENTE 7 sesiones, una para CADA día de la semana (weekday 0 a 6)
 - weekday: 0=Lunes, 1=Martes, 2=Miércoles, 3=Jueves, 4=Viernes, 5=Sábado, 6=Domingo
 - time: hora en formato HH:MM (24h)
 - duration_minutes: duración estimada en minutos
-- title: título corto para el calendario (ej: "Pecho + Cardio", "Carrera 5K")
-- description: detalle de ejercicios, series, repeticiones
+- title: título corto para el calendario (ej: "Pecho + Cardio", "Carrera 5K", "Descanso activo")
+- description: detalle de ejercicios, series, repeticiones. Para días de descanso activo incluye la actividad sugerida (caminata, movilidad, yoga, etc.)
 - weeks: número de semanas que dura el plan (típico: 4)
-- Incluye días de descanso activo si aplica
+- Los días de descanso o recuperación activa TAMBIÉN deben tener su sesión en el JSON con su descripción
+- NO dejes ningún día sin sesión — los 7 días deben aparecer en el array sessions
 """
 
 
