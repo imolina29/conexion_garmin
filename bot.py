@@ -357,8 +357,8 @@ async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if base_url:
             cal_url = f"{base_url}/cal/{token}.ics"
             display_text += (
-                f"\n\n📅 **Tu calendario está listo:**\n"
-                f"`{cal_url}`\n\n"
+                f"\n\n📅 Tu calendario está listo:\n\n"
+                f"{cal_url}\n\n"
                 f"Suscríbete desde iPhone:\n"
                 f"Ajustes → Calendario → Cuentas → Añadir cuenta → Otra → "
                 f"Añadir calendario suscrito → pega la URL"

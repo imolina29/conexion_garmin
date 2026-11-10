@@ -6,6 +6,7 @@ import re
 import threading
 from datetime import date, datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import unquote
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +95,8 @@ class _CalendarHandler(BaseHTTPRequestHandler):
     user_manager = None
 
     def do_GET(self):
-        match = re.match(r"^/cal/([a-f0-9]+)\.ics$", self.path)
+        path = unquote(self.path).strip()
+        match = re.match(r"^/cal/([a-f0-9]+)\.ics$", path)
         if not match:
             self.send_response(404)
             self.end_headers()
@@ -115,9 +117,7 @@ class _CalendarHandler(BaseHTTPRequestHandler):
 
         plan = self.user_manager.get_plan(telegram_id)
         if not plan:
-            self.send_response(404)
-            self.end_headers()
-            return
+            plan = {"sessions": [], "weeks": 4}
 
         profile = self.user_manager.get_profile(telegram_id)
         ics = generate_ics(plan, user_name=profile[:30] if profile else "")
