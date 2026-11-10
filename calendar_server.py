@@ -142,12 +142,10 @@ def parse_plan_json(text: str) -> dict | None:
         return None
 
 
-def next_monday() -> str:
+def plan_start_date() -> str:
     today = date.today()
-    days_ahead = (7 - today.weekday()) % 7
-    if days_ahead == 0:
-        days_ahead = 7
-    return (today + timedelta(days=days_ahead)).isoformat()
+    monday = today - timedelta(days=today.weekday())
+    return monday.isoformat()
 
 
 def start_calendar_server(user_manager, port: int = 8080) -> HTTPServer:

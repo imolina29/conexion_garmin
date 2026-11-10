@@ -1,6 +1,6 @@
 from datetime import date, timedelta
 
-from calendar_server import generate_ics, next_monday, parse_plan_json
+from calendar_server import generate_ics, parse_plan_json, plan_start_date
 
 
 SAMPLE_PLAN = {
@@ -95,9 +95,9 @@ def testparse_plan_json_invalid():
     assert parse_plan_json("```json\n{invalid}\n```") is None
 
 
-def testnext_monday_is_future_monday():
-    result = next_monday()
+def test_plan_start_date_is_current_week_monday():
+    result = plan_start_date()
     d = date.fromisoformat(result)
     assert d.weekday() == 0
-    assert d > date.today()
-    assert (d - date.today()).days <= 7
+    assert d <= date.today()
+    assert (date.today() - d).days < 7
