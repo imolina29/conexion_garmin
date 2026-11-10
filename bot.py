@@ -323,7 +323,7 @@ async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     full_system = system_prompt + "\n\n" + PLAN_PROMPT
 
-    models = ["gemini-3.1-flash-lite", "gemini-flash-lite-latest", "gemini-3-flash-preview"]
+    models = ["gemini-3.1-flash-lite", "gemini-3.1-flash", "gemini-2.0-flash"]
     reply = None
     for model_name in models:
         try:
@@ -424,7 +424,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         role = "model" if msg["role"] == "model" else "user"
         gemini_messages.append({"role": role, "parts": [{"text": msg["content"]}]})
 
-    models = ["gemini-3.1-flash-lite", "gemini-flash-lite-latest", "gemini-3-flash-preview"]
+    models = ["gemini-3.1-flash-lite", "gemini-3.1-flash", "gemini-2.0-flash"]
     reply = None
     for model_name in models:
         try:
