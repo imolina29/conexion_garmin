@@ -258,9 +258,28 @@ Basándote en:
 2. Su perfil de entrenamiento
 3. La conversación reciente (si discutieron preferencias o ajustes)
 
+## Estructura base del cronograma (Lunes a Viernes)
+
+El usuario tiene esta estructura aprobada como punto de partida. Respétala como orden base,
+puedes ajustar ejercicios, volúmenes e intensidades según los datos de Garmin, pero NO cambies
+la distribución de días ni el split de fuerza/carrera:
+
+| Día       | Fuerza (Gym)                          | Carrera (Cinta/Calle)              |
+|-----------|---------------------------------------|------------------------------------|
+| Lunes     | EMPUJE (Pecho, Hombro, Tríceps)       | Descanso Activo                    |
+| Martes    | Descanso                              | Intervalos (Z4/Z5)                 |
+| Miércoles | TRACCIÓN (Espalda, Bíceps)            | Descanso Activo                    |
+| Jueves    | Descanso                              | Base Aeróbica (Z2)                 |
+| Viernes   | PIERNA (Cuádriceps, Isquios, Glúteo)  | Descanso (Opcional ligero)         |
+
+- Los días de "Descanso Activo" implican caminar al menos 5,000 pasos o movilidad
+- Sábado y Domingo son días libres — NO incluirlos en el JSON
+- El plan tiene 5 sesiones (una por cada día de lunes a viernes)
+
 IMPORTANTE: Responde con DOS partes separadas:
 
 PARTE 1 — Tu respuesta normal en español explicando el plan al usuario. Sé crítico y específico como siempre.
+Presenta el plan en formato de tabla similar a la estructura base.
 
 PARTE 2 — Al final, incluye un bloque JSON con este formato EXACTO (sin comentarios dentro del JSON):
 
@@ -280,15 +299,19 @@ PARTE 2 — Al final, incluye un bloque JSON con este formato EXACTO (sin coment
 ```
 
 Reglas para el JSON:
-- OBLIGATORIO: Incluir EXACTAMENTE 7 sesiones, una para CADA día de la semana (weekday 0 a 6)
-- weekday: 0=Lunes, 1=Martes, 2=Miércoles, 3=Jueves, 4=Viernes, 5=Sábado, 6=Domingo
-- time: hora en formato HH:MM (24h)
+- OBLIGATORIO: Incluir EXACTAMENTE 5 sesiones, una para cada día de lunes (0) a viernes (4)
+- weekday: 0=Lunes, 1=Martes, 2=Miércoles, 3=Jueves, 4=Viernes
+- Lunes (0): sesión de fuerza EMPUJE + nota de descanso activo
+- Martes (1): sesión de carrera intervalos
+- Miércoles (2): sesión de fuerza TRACCIÓN + nota de descanso activo
+- Jueves (3): sesión de carrera base aeróbica
+- Viernes (4): sesión de fuerza PIERNA
+- time: hora en formato HH:MM (24h). Gym a las 18:00, carrera según preferencia del usuario
 - duration_minutes: duración estimada en minutos
-- title: título corto para el calendario (ej: "Pecho + Cardio", "Carrera 5K", "Descanso activo")
-- description: detalle de ejercicios, series, repeticiones. Para días de descanso activo incluye la actividad sugerida (caminata, movilidad, yoga, etc.)
+- title: título corto para el calendario (ej: "Empuje — Pecho/Hombro/Tríceps", "Intervalos Z4/Z5")
+- description: detalle de ejercicios, series, repeticiones, zonas de FC objetivo
 - weeks: número de semanas que dura el plan (típico: 4)
-- Los días de descanso o recuperación activa TAMBIÉN deben tener su sesión en el JSON con su descripción
-- NO dejes ningún día sin sesión — los 7 días deben aparecer en el array sessions
+- NO incluir sábado ni domingo
 """
 
 
