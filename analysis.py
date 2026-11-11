@@ -236,8 +236,8 @@ def summarize_daily_stats(stats: dict, date_str: str) -> str:
     return "\n".join(lines)
 
 
-def build_context_snapshot(activities_dir: Path, stats_dir: Path, days: int = 30) -> str:
-    today = date.today()
+def build_context_snapshot(activities_dir: Path, stats_dir: Path, days: int = 30, today: date | None = None) -> str:
+    today = today or date.today()
     cutoff = today - timedelta(days=days)
 
     activities = load_activities(activities_dir)
