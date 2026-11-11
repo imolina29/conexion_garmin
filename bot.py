@@ -6,6 +6,7 @@ import os
 import re
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 from google import genai
@@ -20,6 +21,11 @@ from users import UserManager
 logger = logging.getLogger(__name__)
 
 SYNC_COOLDOWN_MINUTES = 15
+USER_TZ = ZoneInfo(os.getenv("USER_TIMEZONE", "America/Mexico_City"))
+
+
+def user_today() -> date:
+    return datetime.now(tz=USER_TZ).date()
 
 METRIC_REFERENCE = """
 ## Referencia de métricas Garmin
@@ -57,7 +63,14 @@ def build_system_prompt(garmin_snapshot: str, user_profile: str) -> str:
             "o sugiérele que use /perfil para configurarlo."
         )
 
+    t = user_today()
+    dias = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+    meses = ["enero", "febrero", "marzo", "abril", "mayo", "junio",
+             "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
+    today_str = f"{dias[t.weekday()]} {t.day} de {meses[t.month - 1]} de {t.year}"
     return f"""Eres un coach de entrenamiento personal inteligente que analiza datos reales de un reloj Garmin.
+
+📅 Fecha actual: {today_str}
 
 Tu personalidad:
 - Hablas en español, claro y directo
@@ -136,14 +149,15 @@ def run_sync_safe(telegram_id: int) -> bool:
         email, password = creds
 
         client = create_client(email, password, user_manager.token_store_path(telegram_id))
-        today = date.today().isoformat()
+        today = user_today()
+        today_str = today.isoformat()
         activities_dir = user_manager.activities_dir(telegram_id)
         is_first_sync = not any(activities_dir.glob("*.json"))
         lookback = 90 if is_first_sync else 2
-        start = (date.today() - timedelta(days=lookback)).isoformat()
+        start = (today - timedelta(days=lookback)).isoformat()
 
-        sync_activities(client, start, today, user_manager.activities_dir(telegram_id))
-        sync_daily_stats(client, start, today, user_manager.stats_dir(telegram_id))
+        sync_activities(client, start, today_str, user_manager.activities_dir(telegram_id))
+        sync_daily_stats(client, start, today_str, user_manager.stats_dir(telegram_id))
 
         last_sync[telegram_id] = now
         return True
@@ -331,7 +345,7 @@ async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     stats_dir = user_manager.stats_dir(user_id)
 
     run_sync_safe(user_id)
-    snapshot = build_context_snapshot(activities_dir, stats_dir, days=90)
+    snapshot = build_context_snapshot(activities_dir, stats_dir, days=90, today=user_today())
     profile = user_manager.get_profile(user_id)
     system_prompt = build_system_prompt(snapshot, profile)
 
@@ -430,7 +444,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     stats_dir = user_manager.stats_dir(user_id)
 
     synced = run_sync_safe(user_id)
-    snapshot = build_context_snapshot(activities_dir, stats_dir, days=90)
+    snapshot = build_context_snapshot(activities_dir, stats_dir, days=90, today=user_today())
 
     if not synced:
         snapshot = "⚠️ No se pudieron actualizar los datos, usando última sincronización disponible.\n\n" + snapshot
