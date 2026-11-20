@@ -1,4 +1,5 @@
 import json
+from datetime import date
 
 from analysis import (
     load_activities,
@@ -126,7 +127,7 @@ def test_build_context_snapshot_combines_all(tmp_path):
     day_stats = {"stats": {"restingHeartRate": 48, "totalSteps": 5000},
                  "sleep": {}, "training_readiness": [], "hrv": {}}
     (stats_dir / "2026-10-15.json").write_text(json.dumps(day_stats))
-    result = build_context_snapshot(act_dir, stats_dir, days=30)
+    result = build_context_snapshot(act_dir, stats_dir, days=30, today=date(2026, 10, 20))
     assert "Carrera" in result
     assert "48" in result
     assert len(result) > 100
