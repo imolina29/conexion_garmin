@@ -139,6 +139,18 @@ class UserManager:
                 return int(user_dir.name)
         return None
 
+    def list_users(self) -> list[int]:
+        if not self._users_dir.exists():
+            return []
+        result = []
+        for user_dir in self._users_dir.iterdir():
+            if user_dir.is_dir() and (user_dir / "config.json").exists():
+                try:
+                    result.append(int(user_dir.name))
+                except ValueError:
+                    continue
+        return result
+
     def save_plan(self, telegram_id: int, plan: dict) -> None:
         path = self._user_dir(telegram_id) / "plan.json"
         path.parent.mkdir(parents=True, exist_ok=True)

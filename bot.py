@@ -4,7 +4,7 @@
 import logging
 import os
 import re
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time as dt_time, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -329,6 +329,111 @@ Reglas para el JSON:
 """
 
 
+MORNING_REPORT_PROMPT = """Genera un reporte matutino breve para el usuario.
+
+Analiza sus datos de sueño y recuperación de anoche e incluye:
+1. **Calidad de sueño**: Sleep Score, duración, fases (profundo, REM, ligero)
+2. **Estado de recuperación**: Training Readiness, HRV, Body Battery al despertar, FC en reposo
+3. **Recomendación para hoy**: Basándote en las métricas, ¿debería entrenar fuerte, moderado, o descansar?
+
+{plan_section}
+
+Formato: breve y directo (máximo 200 palabras). No repitas los nombres de las métricas en extenso,
+usa abreviaturas después de la primera mención. Sé crítico — si durmió mal, dilo claro.
+Termina con una recomendación concreta de qué hacer hoy."""
+
+EVENING_REPORT_PROMPT = """Genera un reporte de cierre del día para el usuario.
+
+Analiza su actividad del día de hoy e incluye:
+1. **Actividad realizada**: ¿Entrenó hoy? Si sí, resumen breve (tipo, duración, intensidad, FC)
+2. **Pasos del día**: ¿Cumplió el mínimo de 5,000? ¿Llegó a un buen número?
+3. **Cumplimiento del plan**: ¿Hizo lo que tenía programado según su plan semanal?
+
+{plan_section}
+
+Formato: breve y directo (máximo 200 palabras). Si no entrenó cuando debía, señálalo.
+Si entrenó bien, reconócelo pero agrega qué podría mejorar.
+Termina con un dato o consejo para mañana."""
+
+GEMINI_MODELS = ["gemini-3.1-flash-lite", "gemini-3.1-flash", "gemini-2.0-flash"]
+
+
+def call_gemini(system_prompt: str, user_prompt: str) -> str | None:
+    if gemini_client is None:
+        return None
+    messages = [{"role": "user", "parts": [{"text": user_prompt}]}]
+    for model_name in GEMINI_MODELS:
+        try:
+            response = gemini_client.models.generate_content(
+                model=model_name,
+                contents=messages,
+                config={"system_instruction": system_prompt, "max_output_tokens": 1024},
+            )
+            if response.text:
+                return response.text
+        except Exception as e:
+            logger.warning("Model %s failed for report: %s", model_name, str(e)[:100])
+            continue
+    return None
+
+
+def _today_plan_section(user_id: int) -> str:
+    plan = user_manager.get_plan(user_id)
+    if not plan or not plan.get("sessions"):
+        return "El usuario no tiene un plan semanal activo."
+    today_weekday = user_today().weekday()
+    dias = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+    for session in plan["sessions"]:
+        if session.get("weekday") == today_weekday:
+            return (
+                f"Hoy es {dias[today_weekday]} y según su plan tiene programado:\n"
+                f"**{session['title']}** ({session.get('duration_minutes', 60)} min a las {session.get('time', '18:00')})\n"
+                f"Detalle: {session.get('description', 'Sin detalle')}"
+            )
+    return f"Hoy es {dias[today_weekday]} — día libre según su plan (sin sesión programada)."
+
+
+async def send_daily_report(context: ContextTypes.DEFAULT_TYPE, report_type: str) -> None:
+    for user_id in user_manager.list_users():
+        try:
+            last_sync.pop(user_id, None)
+            synced = run_sync_safe(user_id)
+            if not synced:
+                logger.warning("Sync failed for %s report, user %d", report_type, user_id)
+                continue
+
+            snapshot = build_context_snapshot(
+                user_manager.activities_dir(user_id),
+                user_manager.stats_dir(user_id),
+                days=7,
+                today=user_today(),
+            )
+            profile = user_manager.get_profile(user_id)
+            system_prompt = build_system_prompt(snapshot, profile)
+
+            plan_section = _today_plan_section(user_id)
+            if report_type == "morning":
+                prompt = MORNING_REPORT_PROMPT.format(plan_section=plan_section)
+            else:
+                prompt = EVENING_REPORT_PROMPT.format(plan_section=plan_section)
+
+            reply = call_gemini(system_prompt, prompt)
+            if reply:
+                header = "🌅 *Reporte Matutino*" if report_type == "morning" else "🌙 *Reporte Nocturno*"
+                await context.bot.send_message(chat_id=user_id, text=f"{header}\n\n{reply}")
+                logger.info("Sent %s report to user %d", report_type, user_id)
+        except Exception as e:
+            logger.warning("Failed to send %s report to %d: %s", report_type, user_id, e)
+
+
+async def morning_report_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    await send_daily_report(context, "morning")
+
+
+async def evening_report_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    await send_daily_report(context, "evening")
+
+
 async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if not user_manager.user_exists(user_id):
@@ -362,9 +467,8 @@ async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     full_system = system_prompt + "\n\n" + PLAN_PROMPT
 
-    models = ["gemini-3.1-flash-lite", "gemini-3.1-flash", "gemini-2.0-flash"]
     reply = None
-    for model_name in models:
+    for model_name in GEMINI_MODELS:
         try:
             response = gemini_client.models.generate_content(
                 model=model_name,
@@ -463,9 +567,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         role = "model" if msg["role"] == "model" else "user"
         gemini_messages.append({"role": role, "parts": [{"text": msg["content"]}]})
 
-    models = ["gemini-3.1-flash-lite", "gemini-3.1-flash", "gemini-2.0-flash"]
     reply = None
-    for model_name in models:
+    for model_name in GEMINI_MODELS:
         try:
             response = gemini_client.models.generate_content(
                 model=model_name,
@@ -528,7 +631,14 @@ def main() -> None:
     app.add_handler(CommandHandler("plan", cmd_plan))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    print(f"Bot multi-usuario iniciado. Calendario en puerto {cal_port}. Esperando mensajes...")
+    morning_time = dt_time(hour=7, minute=30, tzinfo=USER_TZ)
+    evening_time = dt_time(hour=20, minute=30, tzinfo=USER_TZ)
+    app.job_queue.run_daily(morning_report_job, time=morning_time, name="morning_report")
+    app.job_queue.run_daily(evening_report_job, time=evening_time, name="evening_report")
+
+    print(f"Bot multi-usuario iniciado. Calendario en puerto {cal_port}.")
+    print(f"Reportes programados: 7:30 AM y 8:30 PM ({USER_TZ})")
+    print("Esperando mensajes...")
     app.run_polling()
 
 
