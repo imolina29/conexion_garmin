@@ -631,6 +631,10 @@ def main() -> None:
     app.add_handler(CommandHandler("plan", cmd_plan))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
+    if app.job_queue is None:
+        print("ERROR: JobQueue no disponible. Instala python-telegram-bot[job-queue]")
+        return
+
     morning_time = dt_time(hour=7, minute=30, tzinfo=USER_TZ)
     evening_time = dt_time(hour=20, minute=30, tzinfo=USER_TZ)
     app.job_queue.run_daily(morning_report_job, time=morning_time, name="morning_report")
