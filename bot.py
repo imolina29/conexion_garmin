@@ -22,7 +22,7 @@ from users import UserManager
 logger = logging.getLogger(__name__)
 
 SYNC_COOLDOWN_MINUTES = 15
-USER_TZ = ZoneInfo(os.getenv("USER_TIMEZONE", "America/Mexico_City"))
+USER_TZ = ZoneInfo(os.getenv("USER_TIMEZONE", "America/Bogota"))
 
 
 def user_today() -> date:
