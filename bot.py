@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Multi-user Telegram bot — Garmin training coach powered by Gemini."""
 
+import asyncio
 import logging
 import os
 import re
@@ -436,26 +437,39 @@ async def send_daily_report(context: ContextTypes.DEFAULT_TYPE, report_type: str
             logger.exception("Failed %s report for user %d", report_type, user_id)
 
 
-def _seconds_until(hour: int, minute: int) -> float:
-    now = datetime.now(tz=USER_TZ)
-    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    if target <= now:
-        target += timedelta(days=1)
-    delta = (target - now).total_seconds()
-    logger.info("Next %02d:%02d report in %.0f seconds (%.1f hours)", hour, minute, delta, delta / 3600)
-    return delta
+REPORT_SCHEDULE = [(7, 30, "morning"), (20, 30, "evening")]
 
 
-async def morning_report_job(context: ContextTypes.DEFAULT_TYPE) -> None:
-    await send_daily_report(context, "morning")
-    delay = _seconds_until(7, 30)
-    context.job_queue.run_once(morning_report_job, when=delay, name="morning_report")
+async def report_loop(app) -> None:
+    while True:
+        now = datetime.now(tz=USER_TZ)
+        nearest_delay = None
+        nearest_type = None
 
+        for hour, minute, report_type in REPORT_SCHEDULE:
+            target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if target <= now:
+                target += timedelta(days=1)
+            delay = (target - now).total_seconds()
+            if nearest_delay is None or delay < nearest_delay:
+                nearest_delay = delay
+                nearest_type = report_type
 
-async def evening_report_job(context: ContextTypes.DEFAULT_TYPE) -> None:
-    await send_daily_report(context, "evening")
-    delay = _seconds_until(20, 30)
-    context.job_queue.run_once(evening_report_job, when=delay, name="evening_report")
+        logger.info(
+            "Next report: %s in %.0f seconds (%.1f hours)",
+            nearest_type, nearest_delay, nearest_delay / 3600,
+        )
+        await asyncio.sleep(nearest_delay)
+
+        users = user_manager.list_users()
+        logger.info("Firing %s report for %d users", nearest_type, len(users))
+        for uid in users:
+            try:
+                await generate_and_send_report(app.bot, uid, nearest_type)
+            except Exception:
+                logger.exception("Report failed for user %d", uid)
+
+        await asyncio.sleep(60)
 
 
 async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -675,18 +689,14 @@ def main() -> None:
     app.add_handler(CommandHandler("reporte", cmd_report))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    if app.job_queue is None:
-        print("ERROR: JobQueue no disponible. Instala python-telegram-bot[job-queue]")
-        return
+    async def post_init(application) -> None:
+        asyncio.create_task(report_loop(application))
+        logger.info("Report scheduler started: 7:30 AM / 8:30 PM (%s)", USER_TZ)
 
-    morning_delay = _seconds_until(7, 30)
-    evening_delay = _seconds_until(20, 30)
-    app.job_queue.run_once(morning_report_job, when=morning_delay, name="morning_report")
-    app.job_queue.run_once(evening_report_job, when=evening_delay, name="evening_report")
+    app.post_init = post_init
 
     print(f"Bot multi-usuario iniciado. Calendario en puerto {cal_port}.")
     print(f"Reportes programados: 7:30 AM y 8:30 PM ({USER_TZ})")
-    print(f"  Matutino en {morning_delay/3600:.1f}h, Nocturno en {evening_delay/3600:.1f}h")
     print("Esperando mensajes...")
     app.run_polling()
 
