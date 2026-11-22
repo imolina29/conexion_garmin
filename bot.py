@@ -4,7 +4,7 @@
 import logging
 import os
 import re
-from datetime import date, datetime, time as dt_time, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -436,12 +436,26 @@ async def send_daily_report(context: ContextTypes.DEFAULT_TYPE, report_type: str
             logger.exception("Failed %s report for user %d", report_type, user_id)
 
 
+def _seconds_until(hour: int, minute: int) -> float:
+    now = datetime.now(tz=USER_TZ)
+    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if target <= now:
+        target += timedelta(days=1)
+    delta = (target - now).total_seconds()
+    logger.info("Next %02d:%02d report in %.0f seconds (%.1f hours)", hour, minute, delta, delta / 3600)
+    return delta
+
+
 async def morning_report_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     await send_daily_report(context, "morning")
+    delay = _seconds_until(7, 30)
+    context.job_queue.run_once(morning_report_job, when=delay, name="morning_report")
 
 
 async def evening_report_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     await send_daily_report(context, "evening")
+    delay = _seconds_until(20, 30)
+    context.job_queue.run_once(evening_report_job, when=delay, name="evening_report")
 
 
 async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -665,13 +679,14 @@ def main() -> None:
         print("ERROR: JobQueue no disponible. Instala python-telegram-bot[job-queue]")
         return
 
-    morning_time = dt_time(hour=7, minute=30, tzinfo=USER_TZ)
-    evening_time = dt_time(hour=20, minute=30, tzinfo=USER_TZ)
-    app.job_queue.run_daily(morning_report_job, time=morning_time, name="morning_report")
-    app.job_queue.run_daily(evening_report_job, time=evening_time, name="evening_report")
+    morning_delay = _seconds_until(7, 30)
+    evening_delay = _seconds_until(20, 30)
+    app.job_queue.run_once(morning_report_job, when=morning_delay, name="morning_report")
+    app.job_queue.run_once(evening_report_job, when=evening_delay, name="evening_report")
 
     print(f"Bot multi-usuario iniciado. Calendario en puerto {cal_port}.")
     print(f"Reportes programados: 7:30 AM y 8:30 PM ({USER_TZ})")
+    print(f"  Matutino en {morning_delay/3600:.1f}h, Nocturno en {evening_delay/3600:.1f}h")
     print("Esperando mensajes...")
     app.run_polling()
 
