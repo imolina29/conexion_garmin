@@ -393,37 +393,47 @@ def _today_plan_section(user_id: int) -> str:
     return f"Hoy es {dias[today_weekday]} — día libre según su plan (sin sesión programada)."
 
 
+async def generate_and_send_report(bot, user_id: int, report_type: str) -> None:
+    logger.info("Generating %s report for user %d", report_type, user_id)
+
+    last_sync.pop(user_id, None)
+    synced = run_sync_safe(user_id)
+    if not synced:
+        logger.warning("Sync failed for %s report, user %d — using cached data", report_type, user_id)
+
+    snapshot = build_context_snapshot(
+        user_manager.activities_dir(user_id),
+        user_manager.stats_dir(user_id),
+        days=7,
+        today=user_today(),
+    )
+    profile = user_manager.get_profile(user_id)
+    system_prompt = build_system_prompt(snapshot, profile)
+
+    plan_section = _today_plan_section(user_id)
+    if report_type == "morning":
+        prompt = MORNING_REPORT_PROMPT.format(plan_section=plan_section)
+    else:
+        prompt = EVENING_REPORT_PROMPT.format(plan_section=plan_section)
+
+    reply = call_gemini(system_prompt, prompt)
+    if not reply:
+        logger.error("Gemini returned no response for %s report, user %d", report_type, user_id)
+        return
+
+    header = "🌅 Reporte Matutino" if report_type == "morning" else "🌙 Reporte Nocturno"
+    await bot.send_message(chat_id=user_id, text=f"{header}\n\n{reply}")
+    logger.info("Sent %s report to user %d (%d chars)", report_type, user_id, len(reply))
+
+
 async def send_daily_report(context: ContextTypes.DEFAULT_TYPE, report_type: str) -> None:
-    for user_id in user_manager.list_users():
+    users = user_manager.list_users()
+    logger.info("Starting scheduled %s report for %d users", report_type, len(users))
+    for user_id in users:
         try:
-            last_sync.pop(user_id, None)
-            synced = run_sync_safe(user_id)
-            if not synced:
-                logger.warning("Sync failed for %s report, user %d", report_type, user_id)
-                continue
-
-            snapshot = build_context_snapshot(
-                user_manager.activities_dir(user_id),
-                user_manager.stats_dir(user_id),
-                days=7,
-                today=user_today(),
-            )
-            profile = user_manager.get_profile(user_id)
-            system_prompt = build_system_prompt(snapshot, profile)
-
-            plan_section = _today_plan_section(user_id)
-            if report_type == "morning":
-                prompt = MORNING_REPORT_PROMPT.format(plan_section=plan_section)
-            else:
-                prompt = EVENING_REPORT_PROMPT.format(plan_section=plan_section)
-
-            reply = call_gemini(system_prompt, prompt)
-            if reply:
-                header = "🌅 *Reporte Matutino*" if report_type == "morning" else "🌙 *Reporte Nocturno*"
-                await context.bot.send_message(chat_id=user_id, text=f"{header}\n\n{reply}")
-                logger.info("Sent %s report to user %d", report_type, user_id)
-        except Exception as e:
-            logger.warning("Failed to send %s report to %d: %s", report_type, user_id, e)
+            await generate_and_send_report(context.bot, user_id, report_type)
+        except Exception:
+            logger.exception("Failed %s report for user %d", report_type, user_id)
 
 
 async def morning_report_job(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -432,6 +442,25 @@ async def morning_report_job(context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def evening_report_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     await send_daily_report(context, "evening")
+
+
+async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    if not user_manager.user_exists(user_id):
+        await update.message.reply_text("Primero regístrate con /start")
+        return
+
+    args = context.args
+    report_type = args[0] if args else "morning"
+    if report_type not in ("morning", "evening"):
+        report_type = "morning"
+
+    await update.message.reply_text(f"Generando reporte {report_type}... ⏳")
+    try:
+        await generate_and_send_report(context.bot, user_id, report_type)
+    except Exception as e:
+        logger.exception("Manual report failed for user %d", user_id)
+        await update.message.reply_text(f"Error generando reporte: {e}")
 
 
 async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -629,6 +658,7 @@ def main() -> None:
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("perfil", cmd_profile))
     app.add_handler(CommandHandler("plan", cmd_plan))
+    app.add_handler(CommandHandler("reporte", cmd_report))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     if app.job_queue is None:
