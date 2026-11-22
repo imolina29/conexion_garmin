@@ -420,7 +420,7 @@ async def generate_and_send_report(bot, user_id: int, report_type: str) -> None:
     reply = call_gemini(system_prompt, prompt)
     if not reply:
         logger.error("Gemini returned no response for %s report, user %d", report_type, user_id)
-        return
+        raise RuntimeError("Gemini no respondió")
 
     header = "🌅 Reporte Matutino" if report_type == "morning" else "🌙 Reporte Nocturno"
     await bot.send_message(chat_id=user_id, text=f"{header}\n\n{reply}")
@@ -440,34 +440,54 @@ async def send_daily_report(context: ContextTypes.DEFAULT_TYPE, report_type: str
 REPORT_SCHEDULE = [(7, 30, "morning"), (20, 30, "evening")]
 
 
+def _next_report() -> tuple[float, str]:
+    now = datetime.now(tz=USER_TZ)
+    nearest_delay = None
+    nearest_type = None
+    for hour, minute, report_type in REPORT_SCHEDULE:
+        target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if target <= now:
+            target += timedelta(days=1)
+        delay = (target - now).total_seconds()
+        if nearest_delay is None or delay < nearest_delay:
+            nearest_delay = delay
+            nearest_type = report_type
+    return nearest_delay, nearest_type
+
+
 async def report_loop(app) -> None:
+    delay, report_type = _next_report()
+    hours = delay / 3600
+    nombre = "matutino (7:30 AM)" if report_type == "morning" else "nocturno (8:30 PM)"
+    logger.info("Report scheduler started. Next: %s in %.1fh", report_type, hours)
+
+    for uid in user_manager.list_users():
+        try:
+            await app.bot.send_message(
+                chat_id=uid,
+                text=f"Bot iniciado. Próximo reporte: {nombre} en {hours:.1f}h",
+            )
+        except Exception:
+            logger.warning("Could not send startup msg to user %d", uid)
+
     while True:
-        now = datetime.now(tz=USER_TZ)
-        nearest_delay = None
-        nearest_type = None
+        delay, report_type = _next_report()
+        logger.info("Sleeping %.0f seconds until %s report", delay, report_type)
+        await asyncio.sleep(delay)
 
-        for hour, minute, report_type in REPORT_SCHEDULE:
-            target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-            if target <= now:
-                target += timedelta(days=1)
-            delay = (target - now).total_seconds()
-            if nearest_delay is None or delay < nearest_delay:
-                nearest_delay = delay
-                nearest_type = report_type
-
-        logger.info(
-            "Next report: %s in %.0f seconds (%.1f hours)",
-            nearest_type, nearest_delay, nearest_delay / 3600,
-        )
-        await asyncio.sleep(nearest_delay)
-
-        users = user_manager.list_users()
-        logger.info("Firing %s report for %d users", nearest_type, len(users))
-        for uid in users:
+        nombre = "matutino" if report_type == "morning" else "nocturno"
+        for uid in user_manager.list_users():
             try:
-                await generate_and_send_report(app.bot, uid, nearest_type)
-            except Exception:
+                await generate_and_send_report(app.bot, uid, report_type)
+            except Exception as e:
                 logger.exception("Report failed for user %d", uid)
+                try:
+                    await app.bot.send_message(
+                        chat_id=uid,
+                        text=f"⚠️ No pude generar tu reporte {nombre}: {e}",
+                    )
+                except Exception:
+                    pass
 
         await asyncio.sleep(60)
 
