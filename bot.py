@@ -353,7 +353,10 @@ async def handle_registration(update: Update, context: ContextTypes.DEFAULT_TYPE
         state["step"] = "awaiting_password"
         await update.message.reply_text(
             "Ahora envíame tu contraseña de Garmin Connect.\n"
-            "🔒 Será cifrada y almacenada de forma segura."
+            "🔒 Tu contraseña será cifrada (Fernet/AES) y almacenada en el servidor. "
+            "No se guarda en texto plano, pero sí se almacena de forma cifrada para poder "
+            "conectarse a Garmin automáticamente.\n"
+            "Si en algún momento quieres eliminar tus datos, usa /eliminar."
         )
 
     elif step == "awaiting_password":
@@ -393,14 +396,31 @@ async def handle_registration(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     elif step == "awaiting_profile":
         user_manager.update_profile(user_id, text)
-        del registration_state[user_id]
         if state.get("update_only"):
+            del registration_state[user_id]
             await update.message.reply_text("✅ Perfil actualizado.")
         else:
+            state["step"] = "awaiting_timezone"
+            await update.message.reply_text(
+                "¿En qué país o ciudad estás? (para configurar tu zona horaria y horarios de reportes)"
+            )
+
+    elif step == "awaiting_timezone":
+        tz = resolve_timezone(text.strip())
+        if tz is None:
+            await update.message.reply_text(
+                "No reconocí esa ubicación. Intenta con el nombre de tu ciudad o país "
+                "(ej: Bogotá, Madrid, México, Buenos Aires, Lima):"
+            )
+        else:
+            user_manager.update_timezone(user_id, tz)
+            del registration_state[user_id]
             limit = user_manager.check_rate_limit(user_id)[1]
             await update.message.reply_text(
-                f"✅ ¡Listo! Tu perfil está configurado.\n\n"
-                f"Ya puedes preguntarme lo que quieras sobre tu entrenamiento.\n"
+                f"✅ ¡Listo! Todo configurado.\n\n"
+                f"Zona horaria: {tz}\n\n"
+                f"Ya puedes preguntarme lo que quieras sobre tu entrenamiento. "
+                f"Usa /rutina para definir tu plan semanal y /config para ajustar horarios.\n"
                 f"Tu límite diario es de {limit} mensajes."
             )
 
@@ -519,6 +539,22 @@ async def handle_registration(update: Update, context: ContextTypes.DEFAULT_TYPE
                 f"- Reporte matutino: {morning_time}\n"
                 f"- Reporte nocturno: {normalised}\n\n"
                 "Tus reportes se enviarán en los nuevos horarios."
+            )
+
+    elif step == "awaiting_delete_confirmation":
+        if text.strip().upper() == "ELIMINAR":
+            user_manager.delete_user(user_id)
+            conversations.pop(user_id, None)
+            registration_state.pop(user_id, None)
+            last_sync.pop(user_id, None)
+            await update.message.reply_text(
+                "✅ Todos tus datos han sido eliminados. Hasta pronto.\n"
+                "Si algún día quieres volver, usa /start."
+            )
+        else:
+            del registration_state[user_id]
+            await update.message.reply_text(
+                "Eliminación cancelada. Tus datos siguen intactos."
             )
 
 
@@ -939,6 +975,32 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await update.message.reply_text(reply)
 
 
+async def cmd_eliminar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    if not user_manager.user_exists(user_id):
+        await update.message.reply_text("No estás registrado. Usa /start para comenzar.")
+        return
+
+    registration_state[user_id] = {"step": "awaiting_delete_confirmation"}
+    await update.message.reply_text(
+        "⚠️ ¿Estás seguro? Se eliminarán todos tus datos (credenciales, perfil, actividades).\n\n"
+        "Escribe ELIMINAR para confirmar, o cualquier otra cosa para cancelar."
+    )
+
+
+async def cmd_cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    if user_id in registration_state:
+        del registration_state[user_id]
+        await update.message.reply_text(
+            "✅ Operación cancelada. ¿En qué más puedo ayudarte?"
+        )
+    else:
+        await update.message.reply_text(
+            "No hay ninguna operación activa que cancelar."
+        )
+
+
 def main() -> None:
     load_dotenv()
 
@@ -972,6 +1034,8 @@ def main() -> None:
     app.add_handler(CommandHandler("config", cmd_config))
     app.add_handler(CommandHandler("plan", cmd_plan))
     app.add_handler(CommandHandler("reporte", cmd_report))
+    app.add_handler(CommandHandler("eliminar", cmd_eliminar))
+    app.add_handler(CommandHandler("cancelar", cmd_cancelar))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     async def post_init(application) -> None:

@@ -390,3 +390,209 @@ def test_user_today_with_timezone():
     from zoneinfo import ZoneInfo
     result = user_today(ZoneInfo("America/Bogota"))
     assert result is not None
+
+
+# --- Task 5: Registration transparency, timezone onboarding, /eliminar, /cancelar ---
+
+def test_registration_password_prompt_mentions_encryption():
+    """The password prompt must explain Fernet encryption and /eliminar."""
+    import bot
+    import inspect
+    source = inspect.getsource(bot.handle_registration)
+    assert "cifrada" in source or "Fernet" in source
+    assert "/eliminar" in source
+
+
+def test_registration_awaiting_timezone_step_exists(tmp_path, monkeypatch):
+    """After profile is set during registration (not update_only), state moves to awaiting_timezone."""
+    import bot
+    mgr = UserManager(users_dir=tmp_path)
+    mgr.create_user(42, "a@b.com", "pw")
+    monkeypatch.setattr(bot, "user_manager", mgr)
+    # Simulate being in awaiting_profile during registration (not update_only)
+    bot.registration_state[42] = {"step": "awaiting_profile"}
+
+    update = _make_update(42, "Voy al gym 3 veces por semana")
+    ctx = _make_context()
+
+    from bot import handle_registration
+    asyncio.run(handle_registration(update, ctx))
+
+    # Should NOT clear state — should move to awaiting_timezone
+    assert 42 in bot.registration_state
+    assert bot.registration_state[42]["step"] == "awaiting_timezone"
+
+
+def test_registration_awaiting_timezone_valid(tmp_path, monkeypatch):
+    """Sending a valid city/timezone during registration completes it."""
+    import bot
+    mgr = UserManager(users_dir=tmp_path)
+    mgr.create_user(42, "a@b.com", "pw")
+    monkeypatch.setattr(bot, "user_manager", mgr)
+    bot.registration_state[42] = {"step": "awaiting_timezone"}
+
+    update = _make_update(42, "Bogotá")
+    ctx = _make_context()
+
+    from bot import handle_registration
+    asyncio.run(handle_registration(update, ctx))
+
+    # State should be cleared (registration complete)
+    assert 42 not in bot.registration_state
+    # Timezone should be saved
+    assert mgr.get_timezone(42) == "America/Bogota"
+
+
+def test_registration_awaiting_timezone_invalid_asks_again(tmp_path, monkeypatch):
+    """Sending an unrecognised location keeps state in awaiting_timezone."""
+    import bot
+    mgr = UserManager(users_dir=tmp_path)
+    mgr.create_user(42, "a@b.com", "pw")
+    monkeypatch.setattr(bot, "user_manager", mgr)
+    bot.registration_state[42] = {"step": "awaiting_timezone"}
+
+    update = _make_update(42, "Atlantis")
+    ctx = _make_context()
+
+    from bot import handle_registration
+    asyncio.run(handle_registration(update, ctx))
+
+    assert 42 in bot.registration_state
+    assert bot.registration_state[42]["step"] == "awaiting_timezone"
+    update.message.reply_text.assert_called_once()
+
+
+def test_delete_clears_registration_state(tmp_path):
+    """After /eliminar, all in-memory state for that user is gone."""
+    import bot
+    from users import UserManager
+    mgr = UserManager(users_dir=tmp_path)
+    mgr.create_user(123, "a@b.com", "p")
+    # Simulate in-memory state
+    bot.conversations[123] = bot.ConversationHistory()
+    bot.conversations[123].add("user", "hola")
+    bot.registration_state[123] = {"step": "awaiting_routine_description"}
+    bot.last_sync[123] = None
+    # delete_user removes disk data
+    mgr.delete_user(123)
+    # In-memory cleanup (what /eliminar handler should do)
+    bot.conversations.pop(123, None)
+    bot.registration_state.pop(123, None)
+    bot.last_sync.pop(123, None)
+    assert 123 not in bot.conversations
+    assert 123 not in bot.registration_state
+    assert 123 not in bot.last_sync
+    assert not mgr.user_exists(123)
+
+
+def test_cmd_eliminar_asks_confirmation(tmp_path, monkeypatch):
+    """cmd_eliminar sets awaiting_delete_confirmation state and sends confirmation prompt."""
+    import bot
+    mgr = UserManager(users_dir=tmp_path)
+    mgr.create_user(42, "a@b.com", "pw")
+    monkeypatch.setattr(bot, "user_manager", mgr)
+
+    update = _make_update(42, "/eliminar")
+    ctx = _make_context()
+
+    from bot import cmd_eliminar
+    asyncio.run(cmd_eliminar(update, ctx))
+
+    assert bot.registration_state[42]["step"] == "awaiting_delete_confirmation"
+    update.message.reply_text.assert_called_once()
+    text = update.message.reply_text.call_args[0][0]
+    assert "ELIMINAR" in text
+
+
+def test_cmd_eliminar_unregistered_user(tmp_path, monkeypatch):
+    """cmd_eliminar tells unregistered user to register first."""
+    import bot
+    mgr = UserManager(users_dir=tmp_path)
+    monkeypatch.setattr(bot, "user_manager", mgr)
+
+    update = _make_update(999, "/eliminar")
+    ctx = _make_context()
+
+    from bot import cmd_eliminar
+    asyncio.run(cmd_eliminar(update, ctx))
+
+    assert 999 not in bot.registration_state
+    update.message.reply_text.assert_called_once()
+
+
+def test_delete_confirmation_eliminates_user(tmp_path, monkeypatch):
+    """Typing ELIMINAR in awaiting_delete_confirmation deletes user and clears state."""
+    import bot
+    mgr = UserManager(users_dir=tmp_path)
+    mgr.create_user(42, "a@b.com", "pw")
+    monkeypatch.setattr(bot, "user_manager", mgr)
+    bot.registration_state[42] = {"step": "awaiting_delete_confirmation"}
+    bot.conversations[42] = bot.ConversationHistory()
+    bot.last_sync[42] = None
+
+    update = _make_update(42, "ELIMINAR")
+    ctx = _make_context()
+
+    from bot import handle_registration
+    asyncio.run(handle_registration(update, ctx))
+
+    assert not mgr.user_exists(42)
+    assert 42 not in bot.registration_state
+    assert 42 not in bot.conversations
+    assert 42 not in bot.last_sync
+    update.message.reply_text.assert_called_once()
+
+
+def test_delete_confirmation_wrong_text_cancels(tmp_path, monkeypatch):
+    """Typing anything other than ELIMINAR cancels the deletion and clears state."""
+    import bot
+    mgr = UserManager(users_dir=tmp_path)
+    mgr.create_user(42, "a@b.com", "pw")
+    monkeypatch.setattr(bot, "user_manager", mgr)
+    bot.registration_state[42] = {"step": "awaiting_delete_confirmation"}
+
+    update = _make_update(42, "no")
+    ctx = _make_context()
+
+    from bot import handle_registration
+    asyncio.run(handle_registration(update, ctx))
+
+    # User data must still exist
+    assert mgr.user_exists(42)
+    assert 42 not in bot.registration_state
+    update.message.reply_text.assert_called_once()
+
+
+def test_cmd_cancelar_clears_state(tmp_path, monkeypatch):
+    """cmd_cancelar clears registration_state for the user and confirms."""
+    import bot
+    mgr = UserManager(users_dir=tmp_path)
+    mgr.create_user(42, "a@b.com", "pw")
+    monkeypatch.setattr(bot, "user_manager", mgr)
+    bot.registration_state[42] = {"step": "awaiting_routine_description"}
+
+    update = _make_update(42, "/cancelar")
+    ctx = _make_context()
+
+    from bot import cmd_cancelar
+    asyncio.run(cmd_cancelar(update, ctx))
+
+    assert 42 not in bot.registration_state
+    update.message.reply_text.assert_called_once()
+
+
+def test_cmd_cancelar_no_active_flow(tmp_path, monkeypatch):
+    """cmd_cancelar does not error when there is no active flow."""
+    import bot
+    mgr = UserManager(users_dir=tmp_path)
+    mgr.create_user(42, "a@b.com", "pw")
+    monkeypatch.setattr(bot, "user_manager", mgr)
+    # No state set for user 42
+
+    update = _make_update(42, "/cancelar")
+    ctx = _make_context()
+
+    from bot import cmd_cancelar
+    asyncio.run(cmd_cancelar(update, ctx))
+
+    update.message.reply_text.assert_called_once()
