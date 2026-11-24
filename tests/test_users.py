@@ -154,3 +154,74 @@ def test_list_users(tmp_path):
 
     users = mgr.list_users()
     assert sorted(users) == [111, 222]
+
+
+def test_get_training_routine_default_empty(tmp_path):
+    mgr = UserManager(users_dir=tmp_path)
+    mgr.create_user(123, "a@b.com", "p")
+    assert mgr.get_training_routine(123) == ""
+
+
+def test_update_and_get_training_routine(tmp_path):
+    mgr = UserManager(users_dir=tmp_path)
+    mgr.create_user(123, "a@b.com", "p")
+    mgr.update_training_routine(123, "Lunes: Pecho\nMartes: Espalda")
+    assert mgr.get_training_routine(123) == "Lunes: Pecho\nMartes: Espalda"
+
+
+def test_get_timezone_default(tmp_path):
+    mgr = UserManager(users_dir=tmp_path)
+    mgr.create_user(123, "a@b.com", "p")
+    assert mgr.get_timezone(123) == "America/Bogota"
+
+
+def test_update_and_get_timezone(tmp_path):
+    mgr = UserManager(users_dir=tmp_path)
+    mgr.create_user(123, "a@b.com", "p")
+    mgr.update_timezone(123, "America/Mexico_City")
+    assert mgr.get_timezone(123) == "America/Mexico_City"
+
+
+def test_get_report_times_default(tmp_path):
+    mgr = UserManager(users_dir=tmp_path)
+    mgr.create_user(123, "a@b.com", "p")
+    assert mgr.get_report_times(123) == ("07:30", "20:30")
+
+
+def test_update_and_get_report_times(tmp_path):
+    mgr = UserManager(users_dir=tmp_path)
+    mgr.create_user(123, "a@b.com", "p")
+    mgr.update_report_times(123, "06:00", "21:00")
+    assert mgr.get_report_times(123) == ("06:00", "21:00")
+
+
+def test_delete_user_removes_directory(tmp_path):
+    mgr = UserManager(users_dir=tmp_path)
+    mgr.create_user(123, "a@b.com", "p")
+    assert mgr.delete_user(123) is True
+    assert not (tmp_path / "123").exists()
+    assert not mgr.user_exists(123)
+
+
+def test_delete_user_nonexistent_returns_false(tmp_path):
+    mgr = UserManager(users_dir=tmp_path)
+    assert mgr.delete_user(999) is False
+
+
+def test_legacy_user_gets_defaults(tmp_path):
+    """User created before Phase 1 — no timezone/routine/report fields in config."""
+    mgr = UserManager(users_dir=tmp_path)
+    mgr.create_user(123, "a@b.com", "p")
+    # Simulate legacy config by removing new fields
+    import json
+    config_path = tmp_path / "123" / "config.json"
+    config = json.loads(config_path.read_text())
+    config.pop("training_routine", None)
+    config.pop("timezone", None)
+    config.pop("report_morning", None)
+    config.pop("report_evening", None)
+    config_path.write_text(json.dumps(config))
+    # All getters return defaults
+    assert mgr.get_training_routine(123) == ""
+    assert mgr.get_timezone(123) == "America/Bogota"
+    assert mgr.get_report_times(123) == ("07:30", "20:30")

@@ -2,6 +2,7 @@
 
 import json
 import logging
+import shutil
 import uuid
 from datetime import date
 from pathlib import Path
@@ -94,6 +95,53 @@ class UserManager:
             raise ValueError(f"User {telegram_id} not found")
         data["profile"] = profile
         self._save_raw(telegram_id, data)
+
+    def get_training_routine(self, telegram_id: int) -> str:
+        data = self._load_raw(telegram_id)
+        if not data:
+            return ""
+        return data.get("training_routine", "")
+
+    def update_training_routine(self, telegram_id: int, routine: str) -> None:
+        data = self._load_raw(telegram_id)
+        if not data:
+            raise ValueError(f"User {telegram_id} not found")
+        data["training_routine"] = routine
+        self._save_raw(telegram_id, data)
+
+    def get_timezone(self, telegram_id: int) -> str:
+        data = self._load_raw(telegram_id)
+        if not data:
+            return "America/Bogota"
+        return data.get("timezone", "America/Bogota")
+
+    def update_timezone(self, telegram_id: int, tz: str) -> None:
+        data = self._load_raw(telegram_id)
+        if not data:
+            raise ValueError(f"User {telegram_id} not found")
+        data["timezone"] = tz
+        self._save_raw(telegram_id, data)
+
+    def get_report_times(self, telegram_id: int) -> tuple[str, str]:
+        data = self._load_raw(telegram_id)
+        if not data:
+            return ("07:30", "20:30")
+        return (data.get("report_morning", "07:30"), data.get("report_evening", "20:30"))
+
+    def update_report_times(self, telegram_id: int, morning: str, evening: str) -> None:
+        data = self._load_raw(telegram_id)
+        if not data:
+            raise ValueError(f"User {telegram_id} not found")
+        data["report_morning"] = morning
+        data["report_evening"] = evening
+        self._save_raw(telegram_id, data)
+
+    def delete_user(self, telegram_id: int) -> bool:
+        user_dir = self._user_dir(telegram_id)
+        if not user_dir.exists():
+            return False
+        shutil.rmtree(user_dir)
+        return True
 
     def check_rate_limit(self, telegram_id: int) -> tuple[bool, int]:
         data = self._load_raw(telegram_id)
