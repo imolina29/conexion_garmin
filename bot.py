@@ -311,15 +311,16 @@ async def handle_registration(update: Update, context: ContextTypes.DEFAULT_TYPE
         approval_keywords = {"sí", "si", "ok", "listo", "perfecto", "dale"}
         rejection_keywords = {"no", "cambiar"}
         text_lower = text.strip().lower()
+        words = set(text_lower.split())
 
-        if any(kw in text_lower for kw in approval_keywords):
+        if any(kw in words for kw in approval_keywords):
             user_manager.update_training_routine(user_id, state["parsed_routine"])
             del registration_state[user_id]
             await update.message.reply_text(
                 "✅ Rutina guardada. A partir de ahora /plan generará tu plan respetando esta estructura.\n"
                 "Puedes actualizarla cuando quieras con /rutina."
             )
-        elif any(kw in text_lower for kw in rejection_keywords):
+        elif any(kw in words for kw in rejection_keywords):
             state["step"] = "awaiting_routine_description"
             del state["parsed_routine"]
             await update.message.reply_text(
@@ -337,8 +338,10 @@ async def handle_registration(update: Update, context: ContextTypes.DEFAULT_TYPE
             )
             updated = call_gemini(system, text)
             if not updated:
+                state["step"] = "awaiting_routine_description"
+                del state["parsed_routine"]
                 await update.message.reply_text(
-                    "No pude procesar el ajuste. Intenta de nuevo."
+                    "No pude procesar el ajuste. Intenta de nuevo describiendo tu rutina:"
                 )
                 return
             state["parsed_routine"] = updated
