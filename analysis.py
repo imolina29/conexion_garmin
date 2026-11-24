@@ -157,7 +157,8 @@ def summarize_activity(activity: dict) -> str:
     return f"{date_str} — {name} | {duration_min} min"
 
 
-def summarize_daily_stats(stats: dict, date_str: str) -> str:
+def summarize_daily_stats(stats: dict, date_str: str, today: date | None = None) -> str:
+    is_today = today is not None and date_str == today.isoformat()
     lines = [f"📅 {date_str}"]
 
     st = stats.get("stats", {})
@@ -165,8 +166,14 @@ def summarize_daily_stats(stats: dict, date_str: str) -> str:
     if rhr:
         lines.append(f"  FC reposo: {rhr} bpm")
     steps = st.get("totalSteps")
-    if steps:
-        lines.append(f"  Pasos: {steps:,}")
+    step_goal = st.get("dailyStepGoal")
+    if steps is not None:
+        step_text = f"  Pasos: {steps:,}"
+        if step_goal:
+            step_text += f" de {step_goal:,}"
+        if is_today:
+            step_text += " (parcial — acumulado hasta hora de sync)"
+        lines.append(step_text)
     stress = st.get("averageStressLevel")
     if stress:
         lines.append(f"  Estrés promedio: {stress}")
@@ -265,7 +272,7 @@ def build_context_snapshot(activities_dir: Path, stats_dir: Path, days: int = 30
     sections.append("## ESTADÍSTICAS DIARIAS (últimos 7 días)")
     last_7 = recent_stats[-7:] if len(recent_stats) >= 7 else recent_stats
     for s in last_7:
-        sections.append(summarize_daily_stats(s, s.get("_date", "?")))
+        sections.append(summarize_daily_stats(s, s.get("_date", "?"), today=today))
         sections.append("")
 
     sections.append("## TENDENCIAS")

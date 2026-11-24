@@ -131,3 +131,38 @@ def test_build_context_snapshot_combines_all(tmp_path):
     assert "Carrera" in result
     assert "48" in result
     assert len(result) > 100
+
+
+def test_summarize_daily_stats_today_marks_steps_partial():
+    """Steps for the current day should be marked as partial."""
+    stats = {"stats": {"totalSteps": 80, "dailyStepGoal": 5000},
+             "sleep": {}, "training_readiness": [], "hrv": {}}
+    result = summarize_daily_stats(stats, "2026-11-04", today=date(2026, 11, 4))
+    assert "parcial" in result.lower()
+    assert "80" in result
+
+
+def test_summarize_daily_stats_past_day_not_partial():
+    """Steps for a past day should NOT be marked as partial."""
+    stats = {"stats": {"totalSteps": 8000, "dailyStepGoal": 5000},
+             "sleep": {}, "training_readiness": [], "hrv": {}}
+    result = summarize_daily_stats(stats, "2026-11-03", today=date(2026, 11, 4))
+    assert "parcial" not in result.lower()
+    assert "8,000" in result
+
+
+def test_summarize_daily_stats_includes_step_goal():
+    """Step goal from Garmin should be included in the output."""
+    stats = {"stats": {"totalSteps": 5000, "dailyStepGoal": 7500},
+             "sleep": {}, "training_readiness": [], "hrv": {}}
+    result = summarize_daily_stats(stats, "2026-11-03", today=date(2026, 11, 4))
+    assert "7,500" in result or "7500" in result
+
+
+def test_summarize_daily_stats_no_today_param_backward_compat():
+    """Without today param, function works as before (no partial marker)."""
+    stats = {"stats": {"totalSteps": 80},
+             "sleep": {}, "training_readiness": [], "hrv": {}}
+    result = summarize_daily_stats(stats, "2026-11-04")
+    assert "parcial" not in result.lower()
+    assert "80" in result
