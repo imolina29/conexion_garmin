@@ -143,3 +143,14 @@ def test_save_and_get_plan(tmp_path):
     loaded = mgr.get_plan(123)
     assert loaded["sessions"][0]["title"] == "Pecho"
     assert loaded["weeks"] == 4
+
+
+def test_list_users(tmp_path):
+    mgr = UserManager(users_dir=tmp_path)
+    assert mgr.list_users() == []
+
+    mgr.create_user(111, "a@b.com", "p")
+    mgr.create_user(222, "c@d.com", "p")
+
+    users = mgr.list_users()
+    assert sorted(users) == [111, 222]
