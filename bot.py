@@ -22,6 +22,76 @@ from users import UserManager
 logger = logging.getLogger(__name__)
 
 SYNC_COOLDOWN_MINUTES = 15
+
+# ---------------------------------------------------------------------------
+# Timezone resolution
+# ---------------------------------------------------------------------------
+
+_CITY_TO_IANA: dict[str, str] = {
+    # Colombia
+    "bogota": "America/Bogota",
+    "bogotá": "America/Bogota",
+    "colombia": "America/Bogota",
+    # Mexico
+    "mexico": "America/Mexico_City",
+    "méxico": "America/Mexico_City",
+    "cdmx": "America/Mexico_City",
+    "ciudad de mexico": "America/Mexico_City",
+    "ciudad de méxico": "America/Mexico_City",
+    "guadalajara": "America/Mexico_City",
+    # Argentina
+    "buenos aires": "America/Argentina/Buenos_Aires",
+    "argentina": "America/Argentina/Buenos_Aires",
+    # Spain
+    "madrid": "Europe/Madrid",
+    "españa": "Europe/Madrid",
+    "espana": "Europe/Madrid",
+    # Peru
+    "lima": "America/Lima",
+    "peru": "America/Lima",
+    "perú": "America/Lima",
+    # Chile
+    "santiago": "America/Santiago",
+    "chile": "America/Santiago",
+    # Ecuador
+    "quito": "America/Guayaquil",
+    "ecuador": "America/Guayaquil",
+    # Venezuela
+    "caracas": "America/Caracas",
+    "venezuela": "America/Caracas",
+    # Brazil
+    "sao paulo": "America/Sao_Paulo",
+    "são paulo": "America/Sao_Paulo",
+    "brasil": "America/Sao_Paulo",
+    "brazil": "America/Sao_Paulo",
+    # USA
+    "new york": "America/New_York",
+    "nueva york": "America/New_York",
+    "miami": "America/New_York",
+    "los angeles": "America/Los_Angeles",
+    "los ángeles": "America/Los_Angeles",
+}
+
+
+def resolve_timezone(text: str) -> str | None:
+    """Map a city/country name or direct IANA string to a valid IANA timezone.
+
+    Returns the IANA timezone string, or None if the input cannot be resolved.
+    """
+    if not text:
+        return None
+
+    # Try city/country name mapping first (case-insensitive, stripped)
+    normalised = text.strip().lower()
+    if normalised in _CITY_TO_IANA:
+        return _CITY_TO_IANA[normalised]
+
+    # Try as direct IANA name via ZoneInfo
+    try:
+        ZoneInfo(text.strip())
+        return text.strip()
+    except (KeyError, Exception):
+        return None
 USER_TZ = ZoneInfo(os.getenv("USER_TIMEZONE", "America/Bogota"))
 
 
@@ -216,6 +286,25 @@ async def cmd_rutina(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     )
 
 
+async def cmd_config(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    if not user_manager.user_exists(user_id):
+        await update.message.reply_text("Primero regístrate con /start")
+        return
+
+    tz = user_manager.get_timezone(user_id)
+    morning, evening = user_manager.get_report_times(user_id)
+
+    registration_state[user_id] = {"step": "awaiting_config_timezone"}
+    await update.message.reply_text(
+        f"Configuración actual:\n"
+        f"- Zona horaria: {tz}\n"
+        f"- Reporte matutino: {morning}\n"
+        f"- Reporte nocturno: {evening}\n\n"
+        f"Envíame tu zona horaria (ej: America/Bogota, Madrid, CDMX, Buenos Aires):"
+    )
+
+
 async def handle_registration(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     state = registration_state.get(user_id)
@@ -349,6 +438,54 @@ async def handle_registration(update: Update, context: ContextTypes.DEFAULT_TYPE
                 f"Rutina actualizada:\n\n{updated}\n\n"
                 "¿Está bien así? Responde 'sí' para guardarla, 'no' para empezar de nuevo, "
                 "o escribe más ajustes."
+            )
+
+    elif step == "awaiting_config_timezone":
+        tz = resolve_timezone(text.strip())
+        if tz is None:
+            await update.message.reply_text(
+                "No reconocí esa zona horaria. Envíame una zona horaria válida "
+                "(ej: America/Bogota, Europe/Madrid, CDMX, Buenos Aires):"
+            )
+        else:
+            user_manager.update_timezone(user_id, tz)
+            state["step"] = "awaiting_config_morning"
+            await update.message.reply_text(
+                f"Zona horaria actualizada a {tz}.\n\n"
+                "¿A qué hora quieres recibir el reporte matutino? (formato HH:MM, ej: 07:30)"
+            )
+
+    elif step == "awaiting_config_morning":
+        if not re.fullmatch(r"\d{1,2}:\d{2}", text.strip()):
+            await update.message.reply_text(
+                "Formato incorrecto. Envíame la hora en formato HH:MM (ej: 07:30):"
+            )
+        else:
+            # Normalise to zero-padded HH:MM
+            h, m = text.strip().split(":")
+            normalised = f"{int(h):02d}:{m}"
+            state["morning_time"] = normalised
+            state["step"] = "awaiting_config_evening"
+            await update.message.reply_text(
+                "¿A qué hora quieres recibir el reporte nocturno? (formato HH:MM, ej: 20:30)"
+            )
+
+    elif step == "awaiting_config_evening":
+        if not re.fullmatch(r"\d{1,2}:\d{2}", text.strip()):
+            await update.message.reply_text(
+                "Formato incorrecto. Envíame la hora en formato HH:MM (ej: 20:30):"
+            )
+        else:
+            h, m = text.strip().split(":")
+            normalised = f"{int(h):02d}:{m}"
+            morning_time = state["morning_time"]
+            user_manager.update_report_times(user_id, morning_time, normalised)
+            del registration_state[user_id]
+            await update.message.reply_text(
+                f"Configuración guardada:\n"
+                f"- Reporte matutino: {morning_time}\n"
+                f"- Reporte nocturno: {normalised}\n\n"
+                "Tus reportes se enviarán en los nuevos horarios."
             )
 
 
@@ -804,6 +941,7 @@ def main() -> None:
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("perfil", cmd_profile))
     app.add_handler(CommandHandler("rutina", cmd_rutina))
+    app.add_handler(CommandHandler("config", cmd_config))
     app.add_handler(CommandHandler("plan", cmd_plan))
     app.add_handler(CommandHandler("reporte", cmd_report))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
