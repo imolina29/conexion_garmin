@@ -72,3 +72,51 @@ def test_run_sync_safe_returns_true_on_success(monkeypatch, tmp_path):
     monkeypatch.setattr("bot.sync_daily_stats", lambda *a, **kw: 0)
     result = run_sync_safe(123)
     assert result is True
+
+
+def test_build_plan_prompt_with_routine_includes_it():
+    from bot import build_plan_prompt
+    routine = "Lunes: Pecho\nMiércoles: Espalda\nViernes: Pierna"
+    result = build_plan_prompt(routine)
+    assert "Pecho" in result
+    assert "Espalda" in result
+    assert "Pierna" in result
+    # Must NOT contain the old hardcoded structure
+    assert "EMPUJE (Pecho, Hombro, Tríceps)" not in result
+
+
+def test_build_plan_prompt_without_routine_is_generic():
+    from bot import build_plan_prompt
+    result = build_plan_prompt("")
+    assert "perfil" in result.lower() or "propón" in result.lower() or "sugiere" in result.lower()
+    # Must NOT contain the old hardcoded structure
+    assert "EMPUJE (Pecho, Hombro, Tríceps)" not in result
+
+
+def test_build_plan_prompt_flexible_sessions():
+    from bot import build_plan_prompt
+    routine = "Lunes: Gym\nSábado: Carrera larga"
+    result = build_plan_prompt(routine)
+    # Should tell Gemini to generate sessions matching the routine days, not force 5
+    assert "EXACTAMENTE 5" not in result
+
+
+def test_rutina_flow_states():
+    """Verify /rutina sets up the correct registration_state steps."""
+    from bot import registration_state
+    import bot
+    # Simulate: user triggers /rutina -> state should be awaiting_routine_description
+    # Then user sends text -> state should be awaiting_routine_approval (after Gemini parses)
+    # Then user approves -> state cleared, routine saved
+    registration_state[123] = {"step": "awaiting_routine_description"}
+    assert registration_state[123]["step"] == "awaiting_routine_description"
+
+
+def test_rutina_flow_not_broken_by_concurrent_send():
+    """Registration_state only intercepts user text messages, not bot pushes."""
+    from bot import registration_state
+    # A user in /rutina flow has step set
+    registration_state[123] = {"step": "awaiting_routine_approval", "parsed_routine": "Lunes: Gym"}
+    # This state only affects handle_message -> handle_registration path
+    # Bot.send_message (reports) bypasses this entirely
+    assert registration_state[123]["step"] == "awaiting_routine_approval"

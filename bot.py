@@ -199,6 +199,23 @@ async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     )
 
 
+async def cmd_rutina(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    if not user_manager.user_exists(user_id):
+        await update.message.reply_text("Primero regístrate con /start")
+        return
+
+    registration_state[user_id] = {"step": "awaiting_routine_description"}
+    await update.message.reply_text(
+        "Vamos a definir tu rutina de entrenamiento semanal.\n\n"
+        "Descríbeme en un mensaje cómo es tu semana típica de entrenamiento:\n"
+        "- ¿Qué días entrenas?\n"
+        "- ¿Qué tipo de ejercicio haces cada día? (fuerza, carrera, etc.)\n\n"
+        "Por ejemplo: 'Lunes y miércoles voy al gym a hacer fuerza, martes salgo a correr, "
+        "viernes pierna, sábado carrera larga'"
+    )
+
+
 async def handle_registration(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     state = registration_state.get(user_id)
@@ -265,68 +282,146 @@ async def handle_registration(update: Update, context: ContextTypes.DEFAULT_TYPE
                 f"Tu límite diario es de {limit} mensajes."
             )
 
+    elif step == "awaiting_routine_description":
+        await update.message.reply_text("Analizando tu rutina... ⏳")
+        system = (
+            "Eres un asistente que formatea rutinas de entrenamiento. "
+            "El usuario te va a describir su rutina semanal de forma libre. "
+            "Tu tarea es convertirla en un formato limpio y estructurado, "
+            "listando cada día con su actividad de forma clara. "
+            "Devuelve únicamente la rutina formateada como texto, sin explicaciones adicionales. "
+            "Ejemplo de formato:\nLunes: Fuerza — Pecho y Tríceps\nMartes: Carrera intervalos\n..."
+        )
+        parsed = call_gemini(system, text)
+        if not parsed:
+            await update.message.reply_text(
+                "No pude procesar tu rutina ahora mismo. Intenta de nuevo más tarde."
+            )
+            del registration_state[user_id]
+            return
+        state["parsed_routine"] = parsed
+        state["step"] = "awaiting_routine_approval"
+        await update.message.reply_text(
+            f"He interpretado tu rutina así:\n\n{parsed}\n\n"
+            "¿Es correcto? Responde 'sí' para guardarla, 'no' para describirla de nuevo, "
+            "o escribe los ajustes que necesites."
+        )
 
-PLAN_PROMPT = """Genera un plan de entrenamiento semanal para este usuario.
+    elif step == "awaiting_routine_approval":
+        approval_keywords = {"sí", "si", "ok", "listo", "perfecto", "dale"}
+        rejection_keywords = {"no", "cambiar"}
+        text_lower = text.strip().lower()
+
+        if any(kw in text_lower for kw in approval_keywords):
+            user_manager.update_training_routine(user_id, state["parsed_routine"])
+            del registration_state[user_id]
+            await update.message.reply_text(
+                "✅ Rutina guardada. A partir de ahora /plan generará tu plan respetando esta estructura.\n"
+                "Puedes actualizarla cuando quieras con /rutina."
+            )
+        elif any(kw in text_lower for kw in rejection_keywords):
+            state["step"] = "awaiting_routine_description"
+            del state["parsed_routine"]
+            await update.message.reply_text(
+                "Entendido. Descríbeme de nuevo tu rutina semanal con más detalle:"
+            )
+        else:
+            # Treat the message as a modification request and re-process
+            await update.message.reply_text("Ajustando la rutina... ⏳")
+            system = (
+                "Eres un asistente que formatea rutinas de entrenamiento. "
+                "El usuario tiene una rutina previa y quiere hacerle ajustes. "
+                "Aplica las modificaciones solicitadas y devuelve la rutina completa actualizada "
+                "en formato limpio. Devuelve únicamente la rutina, sin explicaciones. "
+                f"Rutina previa:\n{state.get('parsed_routine', '')}"
+            )
+            updated = call_gemini(system, text)
+            if not updated:
+                await update.message.reply_text(
+                    "No pude procesar el ajuste. Intenta de nuevo."
+                )
+                return
+            state["parsed_routine"] = updated
+            await update.message.reply_text(
+                f"Rutina actualizada:\n\n{updated}\n\n"
+                "¿Está bien así? Responde 'sí' para guardarla, 'no' para empezar de nuevo, "
+                "o escribe más ajustes."
+            )
+
+
+def build_plan_prompt(training_routine: str) -> str:
+    """Build the plan generation prompt. When training_routine is set, embed it and
+    instruct Gemini to respect that structure. When empty, ask Gemini to propose a
+    structure based on the user's profile."""
+
+    if training_routine:
+        routine_section = f"""## Rutina de entrenamiento del usuario
+
+El usuario tiene esta estructura de entrenamiento definida. Respétala: genera sesiones
+únicamente para los días indicados en su rutina. NO cambies la distribución de días ni
+el tipo de sesión por día:
+
+{training_routine}
+
+Puedes ajustar ejercicios específicos, volúmenes e intensidades según los datos de Garmin,
+pero la estructura de días y tipos de sesión debe mantenerse.
+"""
+        sessions_rule = (
+            "- Genera una sesión por cada día de entrenamiento indicado en la rutina del usuario\n"
+            "- weekday: 0=Lunes, 1=Martes, 2=Miércoles, 3=Jueves, 4=Viernes, 5=Sábado, 6=Domingo\n"
+            "- Incluye únicamente los días con sesiones activas (no días de descanso)"
+        )
+    else:
+        routine_section = """## Estructura de entrenamiento
+
+El usuario no ha definido una rutina específica. Propón una estructura adecuada basándote en
+su perfil de entrenamiento, sus datos de Garmin y sus objetivos. Sugiere los días más
+apropiados según lo que indiquen sus datos recientes.
+"""
+        sessions_rule = (
+            "- Genera sesiones para los días que propongas según el perfil del usuario\n"
+            "- weekday: 0=Lunes, 1=Martes, 2=Miércoles, 3=Jueves, 4=Viernes, 5=Sábado, 6=Domingo\n"
+            "- Incluye únicamente los días con sesiones activas"
+        )
+
+    return f"""Genera un plan de entrenamiento semanal para este usuario.
 
 Basándote en:
 1. Sus datos de Garmin (actividades recientes, métricas de recuperación)
 2. Su perfil de entrenamiento
 3. La conversación reciente (si discutieron preferencias o ajustes)
 
-## Estructura base del cronograma (Lunes a Viernes)
-
-El usuario tiene esta estructura aprobada como punto de partida. Respétala como orden base,
-puedes ajustar ejercicios, volúmenes e intensidades según los datos de Garmin, pero NO cambies
-la distribución de días ni el split de fuerza/carrera:
-
-| Día       | Fuerza (Gym)                          | Carrera (Cinta/Calle)              |
-|-----------|---------------------------------------|------------------------------------|
-| Lunes     | EMPUJE (Pecho, Hombro, Tríceps)       | Descanso Activo                    |
-| Martes    | Descanso                              | Intervalos (Z4/Z5)                 |
-| Miércoles | TRACCIÓN (Espalda, Bíceps)            | Descanso Activo                    |
-| Jueves    | Descanso                              | Base Aeróbica (Z2)                 |
-| Viernes   | PIERNA (Cuádriceps, Isquios, Glúteo)  | Descanso (Opcional ligero)         |
-
-- Los días de "Descanso Activo" implican caminar al menos 5,000 pasos o movilidad
-- Sábado y Domingo son días libres — NO incluirlos en el JSON
-- El plan tiene 5 sesiones (una por cada día de lunes a viernes)
+{routine_section}
 
 IMPORTANTE: Responde con DOS partes separadas:
 
 PARTE 1 — Tu respuesta normal en español explicando el plan al usuario. Sé crítico y específico como siempre.
-Presenta el plan en formato de tabla similar a la estructura base.
+Presenta el plan en formato de tabla con los días y sesiones.
 
 PARTE 2 — Al final, incluye un bloque JSON con este formato EXACTO (sin comentarios dentro del JSON):
 
 ```json
-{
+{{
   "sessions": [
-    {
+    {{
       "weekday": 0,
       "time": "18:00",
       "duration_minutes": 60,
       "title": "Título corto",
       "description": "Descripción detallada de ejercicios"
-    }
+    }}
   ],
   "weeks": 4
-}
+}}
 ```
 
 Reglas para el JSON:
-- OBLIGATORIO: Incluir EXACTAMENTE 5 sesiones, una para cada día de lunes (0) a viernes (4)
-- weekday: 0=Lunes, 1=Martes, 2=Miércoles, 3=Jueves, 4=Viernes
-- Lunes (0): sesión de fuerza EMPUJE + nota de descanso activo
-- Martes (1): sesión de carrera intervalos
-- Miércoles (2): sesión de fuerza TRACCIÓN + nota de descanso activo
-- Jueves (3): sesión de carrera base aeróbica
-- Viernes (4): sesión de fuerza PIERNA
+{sessions_rule}
 - time: hora en formato HH:MM (24h). Gym a las 18:00, carrera según preferencia del usuario
 - duration_minutes: duración estimada en minutos
-- title: título corto para el calendario (ej: "Empuje — Pecho/Hombro/Tríceps", "Intervalos Z4/Z5")
+- title: título corto para el calendario
 - description: detalle de ejercicios, series, repeticiones, zonas de FC objetivo
 - weeks: número de semanas que dura el plan (típico: 4)
-- NO incluir sábado ni domingo
 """
 
 
@@ -542,7 +637,7 @@ async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         role = "model" if msg["role"] == "model" else "user"
         gemini_messages.append({"role": role, "parts": [{"text": msg["content"]}]})
 
-    full_system = system_prompt + "\n\n" + PLAN_PROMPT
+    full_system = system_prompt + "\n\n" + build_plan_prompt(user_manager.get_training_routine(user_id))
 
     reply = None
     for model_name in GEMINI_MODELS:
@@ -705,6 +800,7 @@ def main() -> None:
     app = Application.builder().token(token).build()
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("perfil", cmd_profile))
+    app.add_handler(CommandHandler("rutina", cmd_rutina))
     app.add_handler(CommandHandler("plan", cmd_plan))
     app.add_handler(CommandHandler("reporte", cmd_report))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
