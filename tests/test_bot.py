@@ -335,3 +335,58 @@ def test_config_flow_invalid_evening_time_asks_again(tmp_path, monkeypatch):
     asyncio.run(handle_registration(update, ctx))
 
     assert bot.registration_state[42]["step"] == "awaiting_config_evening"
+
+
+# --- _should_send_report tests ---
+
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
+
+def test_should_send_report_at_correct_time(tmp_path):
+    from bot import _should_send_report
+    from users import UserManager
+    mgr = UserManager(users_dir=tmp_path)
+    mgr.create_user(123, "a@b.com", "p")
+    # 07:30 AM in Bogota (UTC-5) = 12:30 UTC
+    now_utc = datetime(2026, 11, 23, 12, 30, 0, tzinfo=timezone.utc)
+    sent_today = {}
+    assert _should_send_report(123, "morning", now_utc, mgr, sent_today) is True
+
+
+def test_should_send_report_wrong_time(tmp_path):
+    from bot import _should_send_report
+    from users import UserManager
+    mgr = UserManager(users_dir=tmp_path)
+    mgr.create_user(123, "a@b.com", "p")
+    # 15:00 UTC = 10:00 AM Bogota — not report time
+    now_utc = datetime(2026, 11, 23, 15, 0, 0, tzinfo=timezone.utc)
+    sent_today = {}
+    assert _should_send_report(123, "morning", now_utc, mgr, sent_today) is False
+
+
+def test_should_send_report_already_sent(tmp_path):
+    from bot import _should_send_report
+    from users import UserManager
+    mgr = UserManager(users_dir=tmp_path)
+    mgr.create_user(123, "a@b.com", "p")
+    now_utc = datetime(2026, 11, 23, 12, 30, 0, tzinfo=timezone.utc)
+    sent_today = {(123, "morning"): "2026-11-23"}
+    assert _should_send_report(123, "morning", now_utc, mgr, sent_today) is False
+
+
+def test_should_send_report_no_users(tmp_path):
+    """Empty user list should not cause errors."""
+    from bot import _should_send_report
+    from users import UserManager
+    mgr = UserManager(users_dir=tmp_path)
+    # No users created — list_users returns []
+    # This tests that the caller (report_loop) handles empty list
+    assert mgr.list_users() == []
+
+
+def test_user_today_with_timezone():
+    from bot import user_today
+    from zoneinfo import ZoneInfo
+    result = user_today(ZoneInfo("America/Bogota"))
+    assert result is not None

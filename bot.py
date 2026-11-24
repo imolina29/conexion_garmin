@@ -95,8 +95,42 @@ def resolve_timezone(text: str) -> str | None:
 USER_TZ = ZoneInfo(os.getenv("USER_TIMEZONE", "America/Bogota"))
 
 
-def user_today() -> date:
-    return datetime.now(tz=USER_TZ).date()
+def user_today(tz: ZoneInfo | None = None) -> date:
+    return datetime.now(tz=tz or USER_TZ).date()
+
+
+def _should_send_report(
+    user_id: int,
+    report_type: str,
+    now_utc: datetime,
+    user_manager: "UserManager",
+    sent_today: dict,
+) -> bool:
+    """Pure function: returns True if the given report should be sent right now.
+
+    Converts now_utc to the user's local timezone, checks whether the local
+    HH:MM falls within a 2-minute window of the scheduled time, and ensures
+    the report has not already been sent today (keyed by (user_id, report_type)
+    with a date-string value).
+    """
+    # Check already-sent guard first (cheapest)
+    key = (user_id, report_type)
+    tz_name = user_manager.get_timezone(user_id)
+    local_now = now_utc.astimezone(ZoneInfo(tz_name))
+    local_date_str = local_now.date().isoformat()
+
+    if sent_today.get(key) == local_date_str:
+        return False
+
+    morning_time, evening_time = user_manager.get_report_times(user_id)
+    scheduled = morning_time if report_type == "morning" else evening_time
+
+    sched_h, sched_m = map(int, scheduled.split(":"))
+    local_minutes = local_now.hour * 60 + local_now.minute
+    sched_minutes = sched_h * 60 + sched_m
+
+    return abs(local_minutes - sched_minutes) <= 1
+
 
 METRIC_REFERENCE = """
 ## Referencia de métricas Garmin
@@ -672,57 +706,52 @@ async def send_daily_report(context: ContextTypes.DEFAULT_TYPE, report_type: str
             logger.exception("Failed %s report for user %d", report_type, user_id)
 
 
-REPORT_SCHEDULE = [(7, 30, "morning"), (20, 30, "evening")]
-
-
-def _next_report() -> tuple[float, str]:
-    now = datetime.now(tz=USER_TZ)
-    nearest_delay = None
-    nearest_type = None
-    for hour, minute, report_type in REPORT_SCHEDULE:
-        target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-        if target <= now:
-            target += timedelta(days=1)
-        delay = (target - now).total_seconds()
-        if nearest_delay is None or delay < nearest_delay:
-            nearest_delay = delay
-            nearest_type = report_type
-    return nearest_delay, nearest_type
-
-
 async def report_loop(app) -> None:
-    delay, report_type = _next_report()
-    hours = delay / 3600
-    nombre = "matutino (7:30 AM)" if report_type == "morning" else "nocturno (8:30 PM)"
-    logger.info("Report scheduler started. Next: %s in %.1fh", report_type, hours)
+    """Poll every 60 seconds and send reports to each user at their local scheduled time."""
+    logger.info("Iniciando programador de reportes por usuario (polling cada 60s)")
 
     for uid in user_manager.list_users():
         try:
             await app.bot.send_message(
                 chat_id=uid,
-                text=f"Bot iniciado. Próximo reporte: {nombre} en {hours:.1f}h",
+                text="Bot iniciado. Recibirás tus reportes en los horarios configurados.",
             )
         except Exception:
-            logger.warning("Could not send startup msg to user %d", uid)
+            logger.warning("No se pudo enviar mensaje de inicio al usuario %d", uid)
+
+    sent_today: dict = {}
 
     while True:
-        delay, report_type = _next_report()
-        logger.info("Sleeping %.0f seconds until %s report", delay, report_type)
-        await asyncio.sleep(delay)
+        now_utc = datetime.now(tz=timezone.utc)
 
-        nombre = "matutino" if report_type == "morning" else "nocturno"
-        for uid in user_manager.list_users():
-            try:
-                await generate_and_send_report(app.bot, uid, report_type)
-            except Exception as e:
-                logger.exception("Report failed for user %d", uid)
-                try:
-                    await app.bot.send_message(
-                        chat_id=uid,
-                        text=f"⚠️ No pude generar tu reporte {nombre}: {e}",
-                    )
-                except Exception:
-                    pass
+        # Clear stale entries from previous dates
+        for key in list(sent_today.keys()):
+            uid, rtype = key
+            tz_name = user_manager.get_timezone(uid)
+            local_date = now_utc.astimezone(ZoneInfo(tz_name)).date().isoformat()
+            if sent_today[key] != local_date:
+                del sent_today[key]
+
+        users = user_manager.list_users()
+        for uid in users:
+            for rtype in ("morning", "evening"):
+                if _should_send_report(uid, rtype, now_utc, user_manager, sent_today):
+                    nombre = "matutino" if rtype == "morning" else "nocturno"
+                    try:
+                        await generate_and_send_report(app.bot, uid, rtype)
+                        tz_name = user_manager.get_timezone(uid)
+                        local_date = now_utc.astimezone(ZoneInfo(tz_name)).date().isoformat()
+                        sent_today[(uid, rtype)] = local_date
+                    except Exception as e:
+                        logger.exception("Reporte %s falló para usuario %d", rtype, uid)
+                        try:
+                            await app.bot.send_message(
+                                chat_id=uid,
+                                text=f"⚠️ No pude generar tu reporte {nombre}: {e}",
+                            )
+                        except Exception:
+                            pass
+            await asyncio.sleep(2)
 
         await asyncio.sleep(60)
 
@@ -948,12 +977,12 @@ def main() -> None:
 
     async def post_init(application) -> None:
         asyncio.create_task(report_loop(application))
-        logger.info("Report scheduler started: 7:30 AM / 8:30 PM (%s)", USER_TZ)
+        logger.info("Programador de reportes iniciado (por usuario, polling cada 60s)")
 
     app.post_init = post_init
 
     print(f"Bot multi-usuario iniciado. Calendario en puerto {cal_port}.")
-    print(f"Reportes programados: 7:30 AM y 8:30 PM ({USER_TZ})")
+    print("Reportes programados por usuario según zona horaria y horario individual.")
     print("Esperando mensajes...")
     app.run_polling()
 
