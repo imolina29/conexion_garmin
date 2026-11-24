@@ -113,7 +113,6 @@ def _should_send_report(
     the report has not already been sent today (keyed by (user_id, report_type)
     with a date-string value).
     """
-    # Check already-sent guard first (cheapest)
     key = (user_id, report_type)
     tz_name = user_manager.get_timezone(user_id)
     local_now = now_utc.astimezone(ZoneInfo(tz_name))
@@ -254,7 +253,7 @@ def run_sync_safe(telegram_id: int) -> bool:
         email, password = creds
 
         client = create_client(email, password, user_manager.token_store_path(telegram_id))
-        today = user_today()
+        today = user_today(ZoneInfo(user_manager.get_timezone(telegram_id)))
         today_str = today.isoformat()
         activities_dir = user_manager.activities_dir(telegram_id)
         is_first_sync = not any(activities_dir.glob("*.json"))
@@ -651,7 +650,7 @@ def _today_plan_section(user_id: int) -> str:
     plan = user_manager.get_plan(user_id)
     if not plan or not plan.get("sessions"):
         return "El usuario no tiene un plan semanal activo."
-    today_weekday = user_today().weekday()
+    today_weekday = user_today(ZoneInfo(user_manager.get_timezone(user_id))).weekday()
     dias = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
     for session in plan["sessions"]:
         if session.get("weekday") == today_weekday:
@@ -675,7 +674,7 @@ async def generate_and_send_report(bot, user_id: int, report_type: str) -> None:
         user_manager.activities_dir(user_id),
         user_manager.stats_dir(user_id),
         days=7,
-        today=user_today(),
+        today=user_today(ZoneInfo(user_manager.get_timezone(user_id))),
     )
     profile = user_manager.get_profile(user_id)
     system_prompt = build_system_prompt(snapshot, profile)
@@ -791,7 +790,7 @@ async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     stats_dir = user_manager.stats_dir(user_id)
 
     run_sync_safe(user_id)
-    snapshot = build_context_snapshot(activities_dir, stats_dir, days=90, today=user_today())
+    snapshot = build_context_snapshot(activities_dir, stats_dir, days=90, today=user_today(ZoneInfo(user_manager.get_timezone(user_id))))
     profile = user_manager.get_profile(user_id)
     system_prompt = build_system_prompt(snapshot, profile)
 
@@ -889,7 +888,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     stats_dir = user_manager.stats_dir(user_id)
 
     synced = run_sync_safe(user_id)
-    snapshot = build_context_snapshot(activities_dir, stats_dir, days=90, today=user_today())
+    snapshot = build_context_snapshot(activities_dir, stats_dir, days=90, today=user_today(ZoneInfo(user_manager.get_timezone(user_id))))
 
     if not synced:
         snapshot = "⚠️ No se pudieron actualizar los datos, usando última sincronización disponible.\n\n" + snapshot
