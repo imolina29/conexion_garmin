@@ -157,7 +157,7 @@ METRIC_REFERENCE = """
 """
 
 
-def build_system_prompt(garmin_snapshot: str, user_profile: str) -> str:
+def build_system_prompt(garmin_snapshot: str, user_profile: str, tz: ZoneInfo | None = None) -> str:
     if user_profile:
         profile_section = user_profile
     else:
@@ -167,7 +167,7 @@ def build_system_prompt(garmin_snapshot: str, user_profile: str) -> str:
             "o sugiérele que use /perfil para configurarlo."
         )
 
-    t = user_today()
+    t = user_today(tz)
     dias = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
     meses = ["enero", "febrero", "marzo", "abril", "mayo", "junio",
              "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
@@ -713,7 +713,8 @@ async def generate_and_send_report(bot, user_id: int, report_type: str) -> None:
         today=user_today(ZoneInfo(user_manager.get_timezone(user_id))),
     )
     profile = user_manager.get_profile(user_id)
-    system_prompt = build_system_prompt(snapshot, profile)
+    user_tz = ZoneInfo(user_manager.get_timezone(user_id))
+    system_prompt = build_system_prompt(snapshot, profile, tz=user_tz)
 
     plan_section = _today_plan_section(user_id)
     if report_type == "morning":
@@ -826,9 +827,10 @@ async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     stats_dir = user_manager.stats_dir(user_id)
 
     run_sync_safe(user_id)
-    snapshot = build_context_snapshot(activities_dir, stats_dir, days=90, today=user_today(ZoneInfo(user_manager.get_timezone(user_id))))
+    user_tz = ZoneInfo(user_manager.get_timezone(user_id))
+    snapshot = build_context_snapshot(activities_dir, stats_dir, days=90, today=user_today(user_tz))
     profile = user_manager.get_profile(user_id)
-    system_prompt = build_system_prompt(snapshot, profile)
+    system_prompt = build_system_prompt(snapshot, profile, tz=user_tz)
 
     if user_id not in conversations:
         conversations[user_id] = ConversationHistory(max_messages=20)
@@ -930,7 +932,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         snapshot = "⚠️ No se pudieron actualizar los datos, usando última sincronización disponible.\n\n" + snapshot
 
     profile = user_manager.get_profile(user_id)
-    system_prompt = build_system_prompt(snapshot, profile)
+    user_tz = ZoneInfo(user_manager.get_timezone(user_id))
+    system_prompt = build_system_prompt(snapshot, profile, tz=user_tz)
 
     if user_id not in conversations:
         conversations[user_id] = ConversationHistory(max_messages=20)
