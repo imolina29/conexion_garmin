@@ -14,7 +14,7 @@ from google import genai
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
-from analysis import build_context_snapshot, summarize_performance_metrics
+from analysis import build_context_snapshot
 from calendar_server import parse_plan_json, plan_start_date, start_calendar_server
 from sync import create_client, sync_activities, sync_daily_stats, sync_performance_metrics
 from users import UserManager

@@ -167,7 +167,7 @@ def sync_performance_metrics(client: Garmin, date_str: str, stats_dir: Path) -> 
         ("load_balance", lambda: client.get_training_four_week_load_balance()),
     ]:
         try:
-            result = api_call_with_retry(call)
+            result = call()
             if result:
                 data[name] = result
         except Exception:
