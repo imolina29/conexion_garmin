@@ -5,8 +5,6 @@ from analysis import (
     load_activities,
     load_daily_stats,
     summarize_activity,
-    summarize_running,
-    summarize_strength,
     summarize_daily_stats,
     build_context_snapshot,
 )
@@ -45,38 +43,59 @@ def test_load_activities_empty_dir(tmp_path):
     assert result == []
 
 
-def test_summarize_running_includes_pace_and_hr():
+def test_summarize_activity_running_shows_distance_and_pace():
     activity = {"summary": {"activityName": "Carrera", "activityType": {"typeKey": "running"},
                 "startTimeLocal": "2026-10-15 08:00:00", "duration": 1800, "distance": 5000,
-                "averageHR": 155, "maxHR": 182, "calories": 350},
+                "averageHR": 155, "maxHR": 182, "calories": 350,
+                "elevationGain": 50, "vO2MaxValue": 42.0,
+                "activityTrainingLoad": 85.0, "aerobicTrainingEffect": 3.5},
                 "hr_zones": [{"zoneNumber": 1, "secsInZone": 200, "zoneLowBoundary": 100}],
                 "splits": {"lapDTOs": [{"distance": 1000, "duration": 360}]}, "laps": {}}
-    result = summarize_running(activity)
-    assert "5.0 km" in result or "5,0 km" in result
+    result = summarize_activity(activity)
+    assert "5.0 km" in result
     assert "min/km" in result
     assert "155" in result
+    assert "42" in result
+    assert "50" in result
 
 
-def test_summarize_strength_includes_exercises():
+def test_summarize_activity_strength_shows_sets():
     activity = {"summary": {"activityName": "Fuerza", "activityType": {"typeKey": "strength_training"},
                 "startTimeLocal": "2026-10-15 09:00:00", "duration": 1800, "calories": 200,
-                "averageHR": 110, "maxHR": 140},
+                "totalSets": 10, "totalReps": 120, "averageHR": 110, "maxHR": 140},
                 "exercise_sets": {"exerciseSets": [
                     {"exerciseName": "BENCH_PRESS", "repetitionCount": 10, "weight": 60, "setType": "ACTIVE"},
                     {"exerciseName": "BENCH_PRESS", "repetitionCount": 8, "weight": 65, "setType": "ACTIVE"}
                 ]}, "hr_zones": [], "splits": {}, "laps": {}}
-    result = summarize_strength(activity)
+    result = summarize_activity(activity)
     assert "Fuerza" in result
-    assert "BENCH_PRESS" in result or "bench" in result.lower()
+    assert "10" in result
+    assert "120" in result
+    assert "BENCH_PRESS" in result
 
 
-def test_summarize_activity_dispatches_by_type():
-    running = {"summary": {"activityType": {"typeKey": "running"}, "activityName": "Run",
-               "startTimeLocal": "2026-10-15 08:00:00", "duration": 1800, "distance": 5000,
-               "averageHR": 150, "maxHR": 170, "calories": 300},
-               "hr_zones": [], "splits": {}, "laps": {}, "exercise_sets": {}}
-    result = summarize_activity(running)
-    assert "km" in result
+def test_summarize_activity_unknown_type_still_useful():
+    activity = {"summary": {"activityName": "Yoga", "activityType": {"typeKey": "yoga"},
+                "startTimeLocal": "2026-10-15 07:00:00", "duration": 3600,
+                "averageHR": 85, "maxHR": 110, "calories": 150,
+                "aerobicTrainingEffect": 1.2},
+                "hr_zones": [], "splits": {}, "laps": {}, "exercise_sets": {}}
+    result = summarize_activity(activity)
+    assert "Yoga" in result
+    assert "60" in result
+    assert "85" in result
+    assert "150" in result
+
+
+def test_summarize_activity_hiking_shows_elevation():
+    activity = {"summary": {"activityName": "Hiking", "activityType": {"typeKey": "hiking"},
+                "startTimeLocal": "2026-10-15 06:00:00", "duration": 7200, "distance": 8000,
+                "averageHR": 120, "maxHR": 155, "calories": 600,
+                "elevationGain": 450, "elevationLoss": 300},
+                "hr_zones": [], "splits": {}, "laps": {}, "exercise_sets": {}}
+    result = summarize_activity(activity)
+    assert "8.0 km" in result
+    assert "450" in result
 
 
 def test_summarize_activity_missing_hr():
@@ -86,6 +105,7 @@ def test_summarize_activity_missing_hr():
                 "hr_zones": [], "splits": {}, "laps": {}, "exercise_sets": {}}
     result = summarize_activity(activity)
     assert isinstance(result, str)
+    assert "FC" not in result
 
 
 def test_summarize_daily_stats_includes_key_metrics():

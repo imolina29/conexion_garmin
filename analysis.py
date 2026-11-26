@@ -4,8 +4,6 @@ import json
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-RUNNING_TYPES = {"running", "treadmill_running", "trail_running"}
-STRENGTH_TYPES = {"strength_training", "indoor_cardio"}
 
 
 def load_activities(activities_dir: Path) -> list[dict]:
@@ -32,32 +30,120 @@ def load_daily_stats(stats_dir: Path) -> list[dict]:
     return result
 
 
-def summarize_running(activity: dict) -> str:
+def summarize_activity(activity: dict) -> str:
     s = activity.get("summary", {})
     name = s.get("activityName", "Actividad")
+    type_key = s.get("activityType", {}).get("typeKey", "")
     date_str = (s.get("startTimeLocal") or "")[:10]
     duration_s = s.get("duration", 0) or 0
     duration_min = round(duration_s / 60, 1)
-    distance_m = s.get("distance", 0) or 0
-    distance_km = round(distance_m / 1000, 1)
+
+    lines = [f"{date_str} — {name} [{type_key}]"]
+
+    distance_m = s.get("distance")
+    if distance_m:
+        distance_km = round(distance_m / 1000, 1)
+        lines.append(f"  Distancia: {distance_km} km | Duración: {duration_min} min")
+        if distance_km > 0 and duration_min > 0:
+            pace = duration_min / distance_km
+            pace_min = int(pace)
+            pace_sec = int((pace % 1) * 60)
+            lines.append(f"  Ritmo: {pace_min}:{pace_sec:02d} min/km")
+    else:
+        lines.append(f"  Duración: {duration_min} min")
+
     avg_hr = s.get("averageHR")
-    max_hr = s.get("maxHR")
-    calories = s.get("calories", 0)
-
-    lines = [f"{date_str} — {name}"]
-    lines.append(f"  Distancia: {distance_km} km | Duración: {duration_min} min")
-
-    if distance_km > 0 and duration_min > 0:
-        pace = duration_min / distance_km
-        pace_min = int(pace)
-        pace_sec = int((pace % 1) * 60)
-        lines.append(f"  Ritmo: {pace_min}:{pace_sec:02d} min/km")
-
     if avg_hr is not None:
         hr_text = f"  FC: avg {int(avg_hr)}"
+        max_hr = s.get("maxHR")
         if max_hr is not None:
             hr_text += f" | max {int(max_hr)}"
         lines.append(hr_text)
+
+    calories = s.get("calories")
+    if calories:
+        lines.append(f"  Calorías: {int(calories)}")
+
+    elev_gain = s.get("elevationGain")
+    elev_loss = s.get("elevationLoss")
+    if elev_gain or elev_loss:
+        parts = []
+        if elev_gain:
+            parts.append(f"+{int(elev_gain)}m")
+        if elev_loss:
+            parts.append(f"-{int(elev_loss)}m")
+        lines.append(f"  Elevación: {' / '.join(parts)}")
+
+    total_sets = s.get("totalSets")
+    total_reps = s.get("totalReps")
+    if total_sets:
+        set_text = f"  Sets: {total_sets}"
+        if total_reps:
+            set_text += f" | Reps: {total_reps}"
+        lines.append(set_text)
+
+    exercise_sets = activity.get("exercise_sets", {})
+    ex_list = exercise_sets.get("exerciseSets", [])
+    if ex_list:
+        exercises: dict[str, list] = {}
+        for s_item in ex_list:
+            if s_item.get("setType") != "ACTIVE":
+                continue
+            ex_name = s_item.get("exerciseName") or "Ejercicio"
+            if ex_name == "UNKNOWN":
+                candidates = s_item.get("exercises", [])
+                if candidates and isinstance(candidates, list):
+                    for ex in candidates:
+                        if isinstance(ex, dict) and ex.get("category"):
+                            ex_name = ex["category"]
+                            break
+            exercises.setdefault(ex_name, []).append(s_item)
+        for ex_name, ex_sets in exercises.items():
+            set_descs = []
+            for st in ex_sets:
+                reps = st.get("repetitionCount")
+                weight = st.get("weight")
+                if reps and weight:
+                    set_descs.append(f"{reps}x{weight}kg")
+                elif reps:
+                    set_descs.append(f"{reps} reps")
+            lines.append(f"  {ex_name}: {', '.join(set_descs)}")
+
+    cadence = s.get("averageRunningCadenceInStepsPerMinute")
+    if cadence:
+        lines.append(f"  Cadencia: {int(cadence)} spm")
+    stride = s.get("avgStrideLength")
+    if stride:
+        lines.append(f"  Zancada: {round(stride / 100, 2)}m")
+    gct = s.get("avgGroundContactTime")
+    if gct:
+        lines.append(f"  Contacto suelo: {int(gct)}ms")
+
+    avg_power = s.get("avgPower")
+    if avg_power:
+        power_text = f"  Potencia: avg {int(avg_power)}W"
+        max_power = s.get("maxPower")
+        if max_power:
+            power_text += f" | max {int(max_power)}W"
+        lines.append(power_text)
+
+    vo2 = s.get("vO2MaxValue")
+    if vo2:
+        lines.append(f"  VO2max: {vo2}")
+
+    te_aero = s.get("aerobicTrainingEffect")
+    if te_aero:
+        lines.append(f"  Training Effect: {te_aero}")
+    load = s.get("activityTrainingLoad")
+    if load:
+        lines.append(f"  Training Load: {round(load, 1)}")
+    te_label = s.get("trainingEffectLabel")
+    if te_label:
+        lines.append(f"  Efecto: {te_label}")
+
+    bb_diff = s.get("differenceBodyBattery")
+    if bb_diff is not None:
+        lines.append(f"  BB impacto: {bb_diff}")
 
     hr_zones = activity.get("hr_zones") or []
     if hr_zones:
@@ -66,7 +152,7 @@ def summarize_running(activity: dict) -> str:
             zn = z.get("zoneNumber", "?")
             secs = z.get("secsInZone", 0)
             if secs > 0:
-                zone_parts.append(f"Z{zn}: {round(secs / 60, 1)} min")
+                zone_parts.append(f"Z{zn}: {round(secs / 60, 1)}min")
         if zone_parts:
             lines.append(f"  Zonas FC: {', '.join(zone_parts)}")
 
@@ -85,76 +171,7 @@ def summarize_running(activity: dict) -> str:
         if split_texts:
             lines.append(f"  Splits: {', '.join(split_texts)}")
 
-    if calories:
-        lines.append(f"  Calorías: {int(calories)}")
-
     return "\n".join(lines)
-
-
-def summarize_strength(activity: dict) -> str:
-    s = activity.get("summary", {})
-    name = s.get("activityName", "Actividad")
-    date_str = (s.get("startTimeLocal") or "")[:10]
-    duration_s = s.get("duration", 0) or 0
-    duration_min = round(duration_s / 60, 1)
-    avg_hr = s.get("averageHR")
-    max_hr = s.get("maxHR")
-    calories = s.get("calories", 0)
-
-    lines = [f"{date_str} — {name}"]
-    lines.append(f"  Duración: {duration_min} min")
-
-    if avg_hr is not None:
-        hr_text = f"  FC: avg {int(avg_hr)}"
-        if max_hr is not None:
-            hr_text += f" | max {int(max_hr)}"
-        lines.append(hr_text)
-
-    exercise_sets = activity.get("exercise_sets", {})
-    sets = exercise_sets.get("exerciseSets", [])
-    if sets:
-        exercises: dict[str, list] = {}
-        for s_item in sets:
-            if s_item.get("setType") != "ACTIVE":
-                continue
-            ex_name = s_item.get("exerciseName") or "Ejercicio"
-            if ex_name == "UNKNOWN":
-                ex_list = s_item.get("exercises", [])
-                if ex_list and isinstance(ex_list, list):
-                    for ex in ex_list:
-                        if isinstance(ex, dict) and ex.get("exerciseName"):
-                            ex_name = ex["exerciseName"]
-                            break
-            exercises.setdefault(ex_name, []).append(s_item)
-
-        for ex_name, ex_sets in exercises.items():
-            set_descs = []
-            for st in ex_sets:
-                reps = st.get("repetitionCount")
-                weight = st.get("weight")
-                if reps and weight:
-                    set_descs.append(f"{reps}x{weight}kg")
-                elif reps:
-                    set_descs.append(f"{reps} reps")
-            lines.append(f"  {ex_name}: {', '.join(set_descs)}")
-
-    if calories:
-        lines.append(f"  Calorías: {int(calories)}")
-
-    return "\n".join(lines)
-
-
-def summarize_activity(activity: dict) -> str:
-    type_key = activity.get("summary", {}).get("activityType", {}).get("typeKey", "")
-    if type_key in RUNNING_TYPES:
-        return summarize_running(activity)
-    if type_key in STRENGTH_TYPES:
-        return summarize_strength(activity)
-    s = activity.get("summary", {})
-    name = s.get("activityName", "Actividad")
-    date_str = (s.get("startTimeLocal") or "")[:10]
-    duration_min = round((s.get("duration", 0) or 0) / 60, 1)
-    return f"{date_str} — {name} | {duration_min} min"
 
 
 def summarize_daily_stats(stats: dict, date_str: str, today: date | None = None) -> str:
@@ -286,11 +303,12 @@ def build_context_snapshot(activities_dir: Path, stats_dir: Path, days: int = 30
 
     sections.append("## ACTIVIDADES RECIENTES")
     if recent:
-        running_count = sum(1 for a in recent
-                           if a.get("summary", {}).get("activityType", {}).get("typeKey", "") in RUNNING_TYPES)
-        strength_count = sum(1 for a in recent
-                            if a.get("summary", {}).get("activityType", {}).get("typeKey", "") in STRENGTH_TYPES)
-        sections.append(f"Total: {len(recent)} actividades ({running_count} carrera, {strength_count} fuerza)\n")
+        type_counts: dict[str, int] = {}
+        for a in recent:
+            tk = a.get("summary", {}).get("activityType", {}).get("typeKey", "other")
+            type_counts[tk] = type_counts.get(tk, 0) + 1
+        breakdown = ", ".join(f"{cnt} {tk}" for tk, cnt in type_counts.items())
+        sections.append(f"Total: {len(recent)} actividades ({breakdown})\n")
         for a in recent:
             sections.append(summarize_activity(a))
             sections.append("")
@@ -351,11 +369,10 @@ def build_context_snapshot(activities_dir: Path, stats_dir: Path, days: int = 30
                 trend = f" ({'↑' if diff > 0 else '↓'} {abs(diff):.1f} vs semana anterior)" if diff != 0 else " (=)"
             sections.append(f"Training Readiness promedio: {tr_now}{trend}")
 
-        running_acts = [a for a in recent
-                        if a.get("summary", {}).get("activityType", {}).get("typeKey", "") in RUNNING_TYPES]
-        if running_acts:
+        distance_acts = [a for a in recent if a.get("summary", {}).get("distance")]
+        if distance_acts:
             paces = []
-            for a in running_acts:
+            for a in distance_acts:
                 dist = (a.get("summary", {}).get("distance") or 0) / 1000
                 dur = (a.get("summary", {}).get("duration") or 0) / 60
                 if dist > 0:
@@ -364,7 +381,7 @@ def build_context_snapshot(activities_dir: Path, stats_dir: Path, days: int = 30
                 avg_pace = sum(paces) / len(paces)
                 p_min = int(avg_pace)
                 p_sec = int((avg_pace % 1) * 60)
-                sections.append(f"Ritmo promedio running: {p_min}:{p_sec:02d} min/km")
+                sections.append(f"Ritmo promedio (distancia): {p_min}:{p_sec:02d} min/km")
 
         sections.append(f"Frecuencia: {len(recent)} sesiones en {days} días ({round(len(recent) / (days / 7), 1)}/semana)")
 
