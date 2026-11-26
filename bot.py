@@ -197,6 +197,8 @@ Tu personalidad:
 {profile_section}
 
 ## Notas sobre datos Garmin
+- Los datos incluyen métricas de rendimiento (VO2max, predicciones de carrera, estado de entrenamiento) cuando están disponibles. Úsalas para dar recomendaciones basadas en el nivel real del usuario
+- El perfil deportivo muestra los deportes que practica el usuario — adapta tus recomendaciones a SUS deportes, no asumas que corre o hace gym
 - Las actividades de fuerza en Garmin no registran bien los nombres de ejercicios — si el usuario te dice qué hizo (ej: "hoy fue pecho"), úsalo para interpretar los datos de esa sesión
 - El usuario puede decirte antes de entrenar qué planea hacer — recuérdalo para cuando pregunte después cómo le fue
 
@@ -319,9 +321,9 @@ async def cmd_rutina(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         "Vamos a definir tu rutina de entrenamiento semanal.\n\n"
         "Descríbeme en un mensaje cómo es tu semana típica de entrenamiento:\n"
         "- ¿Qué días entrenas?\n"
-        "- ¿Qué tipo de ejercicio haces cada día? (fuerza, carrera, etc.)\n\n"
-        "Por ejemplo: 'Lunes y miércoles voy al gym a hacer fuerza, martes salgo a correr, "
-        "viernes pierna, sábado carrera larga'"
+        "- ¿Qué tipo de ejercicio haces cada día?\n\n"
+        "Por ejemplo: 'Lunes gym, martes salgo a correr, miércoles natación, "
+        "viernes pierna, sábado ruta larga en bici'"
     )
 
 
@@ -632,7 +634,7 @@ PARTE 2 — Al final, incluye un bloque JSON con este formato EXACTO (sin coment
 
 Reglas para el JSON:
 {sessions_rule}
-- time: hora en formato HH:MM (24h). Gym a las 18:00, carrera según preferencia del usuario
+- time: hora en formato HH:MM (24h). Ajusta según el tipo de actividad y preferencia del usuario
 - duration_minutes: duración estimada en minutos
 - title: título corto para el calendario
 - description: detalle de ejercicios, series, repeticiones, zonas de FC objetivo
@@ -657,7 +659,7 @@ EVENING_REPORT_PROMPT = """Genera un reporte de cierre del día para el usuario.
 
 Analiza su actividad del día de hoy e incluye:
 1. **Actividad realizada**: ¿Entrenó hoy? Si sí, resumen breve (tipo, duración, intensidad, FC)
-2. **Pasos del día**: Los pasos de hoy no aparecen en los datos (se omiten por ser parciales). Usa los pasos de ayer como referencia para evaluar contra la meta
+2. **Pasos del día**: Evalúa los pasos del día contra la meta si aparecen en los datos
 3. **Cumplimiento del plan**: ¿Hizo lo que tenía programado según su plan semanal?
 
 {plan_section}
