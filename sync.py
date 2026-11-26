@@ -156,6 +156,27 @@ def sync_activities(client: Garmin, start_date: str, end_date: str, activities_d
     return new_count
 
 
+def sync_performance_metrics(client: Garmin, date_str: str, stats_dir: Path) -> dict:
+    data = {}
+    for name, call in [
+        ("max_metrics", lambda: client.get_max_metrics_latest(date_str)),
+        ("training_status", lambda: client.get_training_status(date_str)),
+        ("race_predictions", lambda: client.get_race_predictions()),
+        ("endurance_score", lambda: client.get_endurance_score(date_str)),
+        ("lactate_threshold", lambda: client.get_lactate_threshold()),
+        ("load_balance", lambda: client.get_training_four_week_load_balance()),
+    ]:
+        try:
+            result = api_call_with_retry(call)
+            if result:
+                data[name] = result
+        except Exception:
+            pass
+    if data:
+        atomic_write_json(stats_dir / "performance.json", data)
+    return data
+
+
 def sync_daily_stats(client: Garmin, start_date: str, end_date: str, stats_dir: Path | None = None) -> int:
     target_dir = stats_dir or STATS_DIR
     target_dir.mkdir(parents=True, exist_ok=True)

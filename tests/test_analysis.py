@@ -6,6 +6,7 @@ from analysis import (
     load_daily_stats,
     summarize_activity,
     summarize_daily_stats,
+    summarize_performance_metrics,
     build_context_snapshot,
 )
 
@@ -248,3 +249,25 @@ def test_snapshot_dynamic_sport_breakdown(tmp_path):
     assert "swimming" in result.lower()
     assert "carrera" not in result
     assert "fuerza" not in result
+
+
+def test_summarize_performance_metrics_vo2max():
+    perf = {
+        "max_metrics": {"generic": [{"vo2MaxPreciseValue": 42.5}]},
+        "training_status": {"currentTrainingStatus": "PRODUCTIVE"},
+        "race_predictions": [{"raceTime": {"5k": 1500, "10k": 3200}}],
+    }
+    result = summarize_performance_metrics(perf)
+    assert "42.5" in result
+    assert "PRODUCTIVE" in result
+
+
+def test_summarize_performance_metrics_empty():
+    result = summarize_performance_metrics({})
+    assert result == ""
+
+
+def test_summarize_performance_metrics_partial():
+    perf = {"endurance_score": {"overallScore": 68}}
+    result = summarize_performance_metrics(perf)
+    assert "68" in result

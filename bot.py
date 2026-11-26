@@ -14,9 +14,9 @@ from google import genai
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
-from analysis import build_context_snapshot
+from analysis import build_context_snapshot, summarize_performance_metrics
 from calendar_server import parse_plan_json, plan_start_date, start_calendar_server
-from sync import create_client, sync_activities, sync_daily_stats
+from sync import create_client, sync_activities, sync_daily_stats, sync_performance_metrics
 from users import UserManager
 
 logger = logging.getLogger(__name__)
@@ -262,6 +262,12 @@ def run_sync_safe(telegram_id: int) -> bool:
 
         sync_activities(client, start, today_str, user_manager.activities_dir(telegram_id))
         sync_daily_stats(client, start, today_str, user_manager.stats_dir(telegram_id))
+
+        stats_dir = user_manager.stats_dir(telegram_id)
+        perf_file = stats_dir / "performance.json"
+        perf_stale = not perf_file.exists() or (now.timestamp() - perf_file.stat().st_mtime > 86400)
+        if perf_stale:
+            sync_performance_metrics(client, today_str, stats_dir)
 
         last_sync[telegram_id] = now
         return True

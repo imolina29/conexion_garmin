@@ -288,6 +288,59 @@ def summarize_daily_stats(stats: dict, date_str: str, today: date | None = None)
     return "\n".join(lines)
 
 
+def summarize_performance_metrics(perf: dict) -> str:
+    if not perf:
+        return ""
+    lines = []
+
+    max_metrics = perf.get("max_metrics", {})
+    generic = max_metrics.get("generic", [])
+    if generic and isinstance(generic, list):
+        vo2 = generic[0].get("vo2MaxPreciseValue")
+        if vo2:
+            lines.append(f"  VO2max: {vo2}")
+
+    ts = perf.get("training_status", {})
+    status = ts.get("currentTrainingStatus")
+    if status:
+        lines.append(f"  Estado entrenamiento: {status}")
+
+    races = perf.get("race_predictions", [])
+    if races and isinstance(races, list):
+        rt = races[0].get("raceTime", {})
+        if rt:
+            race_parts = []
+            for dist_name, secs in rt.items():
+                if secs and isinstance(secs, (int, float)):
+                    mins = int(secs) // 60
+                    sec = int(secs) % 60
+                    race_parts.append(f"{dist_name}: {mins}:{sec:02d}")
+            if race_parts:
+                lines.append(f"  Predicciones: {', '.join(race_parts)}")
+
+    endurance = perf.get("endurance_score", {})
+    es = endurance.get("overallScore")
+    if es:
+        lines.append(f"  Endurance Score: {es}")
+
+    lt = perf.get("lactate_threshold", {})
+    lt_hr = lt.get("lactateThreshold")
+    if lt_hr:
+        lines.append(f"  Umbral láctico FC: {lt_hr} bpm")
+
+    lb = perf.get("load_balance", {})
+    loads = lb.get("weeklyTrainingLoads", [])
+    if loads and isinstance(loads, list) and loads:
+        last_load = loads[-1] if isinstance(loads[-1], dict) else {}
+        total = last_load.get("totalTrainingLoad")
+        if total:
+            lines.append(f"  Carga semanal: {round(total, 1)}")
+
+    if not lines:
+        return ""
+    return "## MÉTRICAS DE RENDIMIENTO\n" + "\n".join(lines)
+
+
 def build_context_snapshot(activities_dir: Path, stats_dir: Path, days: int = 30, today: date | None = None) -> str:
     today = today or date.today()
     cutoff = today - timedelta(days=days)
@@ -384,5 +437,13 @@ def build_context_snapshot(activities_dir: Path, stats_dir: Path, days: int = 30
                 sections.append(f"Ritmo promedio (distancia): {p_min}:{p_sec:02d} min/km")
 
         sections.append(f"Frecuencia: {len(recent)} sesiones en {days} días ({round(len(recent) / (days / 7), 1)}/semana)")
+
+    perf_file = stats_dir / "performance.json"
+    if perf_file.exists():
+        perf_data = json.loads(perf_file.read_text())
+        perf_section = summarize_performance_metrics(perf_data)
+        if perf_section:
+            sections.append("")
+            sections.append(perf_section)
 
     return "\n".join(sections)
