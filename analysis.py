@@ -367,6 +367,15 @@ def build_context_snapshot(activities_dir: Path, stats_dir: Path, days: int = 30
             sections.append("")
     else:
         sections.append("Sin actividades en este período.\n")
+        type_counts = {}
+
+    if type_counts:
+        sections.append("## PERFIL DEPORTIVO")
+        sorted_sports = sorted(type_counts.items(), key=lambda x: x[1], reverse=True)
+        sport_list = ", ".join(f"{cnt} {tk}" for tk, cnt in sorted_sports)
+        sections.append(f"Deportes practicados (últimos {days} días): {sport_list}")
+        sections.append(f"Deporte principal: {sorted_sports[0][0]}")
+        sections.append("")
 
     sections.append("## ESTADÍSTICAS DIARIAS (últimos 7 días)")
     last_7 = recent_stats[-7:] if len(recent_stats) >= 7 else recent_stats

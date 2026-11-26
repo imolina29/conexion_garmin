@@ -271,3 +271,24 @@ def test_summarize_performance_metrics_partial():
     perf = {"endurance_score": {"overallScore": 68}}
     result = summarize_performance_metrics(perf)
     assert "68" in result
+
+
+def test_snapshot_includes_sport_profile(tmp_path):
+    act_dir = tmp_path / "activities"
+    act_dir.mkdir()
+    stats_dir = tmp_path / "stats"
+    stats_dir.mkdir()
+    for i in range(5):
+        a = {"summary": {"activityId": str(i), "activityName": "Run",
+             "activityType": {"typeKey": "running"}, "startTimeLocal": f"2026-10-{10+i} 08:00:00",
+             "duration": 1800, "distance": 5000, "averageHR": 155}}
+        (act_dir / f"{i}.json").write_text(json.dumps(a))
+    for i in range(3):
+        a = {"summary": {"activityId": str(10+i), "activityName": "Fuerza",
+             "activityType": {"typeKey": "strength_training"}, "startTimeLocal": f"2026-10-{15+i} 09:00:00",
+             "duration": 2400, "totalSets": 12, "totalReps": 100}}
+        (act_dir / f"{10+i}.json").write_text(json.dumps(a))
+    result = build_context_snapshot(act_dir, stats_dir, days=30, today=date(2026, 10, 25))
+    assert "PERFIL DEPORTIVO" in result
+    assert "running" in result.lower()
+    assert "strength" in result.lower()
