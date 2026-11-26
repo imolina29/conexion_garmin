@@ -20,9 +20,6 @@ STATS_DIR = RAW_DIR / "stats"
 LAST_SYNC_FILE = DATA_DIR / ".last_sync"
 TOKEN_STORE = DATA_DIR / ".garmin_session"
 
-STRENGTH_TYPES = {"strength_training", "indoor_cardio"}
-RUNNING_TYPES = {"running", "treadmill_running", "trail_running"}
-
 MAX_RETRIES = 3
 RETRY_DELAY = 2
 
@@ -97,7 +94,7 @@ def get_activity_type_key(activity: dict) -> str:
     return activity_type.get("typeKey", "unknown")
 
 
-def fetch_activity_details(client: Garmin, activity_id: str, type_key: str) -> dict:
+def fetch_activity_details(client: Garmin, activity_id: str, summary: dict) -> dict:
     result = {"summary": {}, "details": {}, "exercise_sets": {}, "splits": {}, "hr_zones": {}, "laps": {}}
 
     result["details"] = api_call_with_retry(client.get_activity, activity_id)
@@ -112,13 +109,13 @@ def fetch_activity_details(client: Garmin, activity_id: str, type_key: str) -> d
     except Exception:
         pass
 
-    if type_key in STRENGTH_TYPES:
+    if summary.get("totalSets"):
         try:
             result["exercise_sets"] = api_call_with_retry(client.get_activity_exercise_sets, activity_id)
         except Exception:
             pass
 
-    if type_key in RUNNING_TYPES:
+    if summary.get("distance"):
         try:
             result["splits"] = api_call_with_retry(client.get_activity_splits, activity_id)
         except Exception:
@@ -149,7 +146,7 @@ def sync_activities(client: Garmin, start_date: str, end_date: str, activities_d
         type_key = get_activity_type_key(activity)
         print(f"  Descargando: {activity.get('activityName', 'Sin nombre')} ({type_key}) - {activity_id}")
 
-        details = fetch_activity_details(client, activity_id, type_key)
+        details = fetch_activity_details(client, activity_id, activity)
         details["summary"] = activity
 
         atomic_write_json(file_path, details)
