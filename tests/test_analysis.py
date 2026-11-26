@@ -231,3 +231,20 @@ def test_daily_stats_includes_intensity_minutes():
     result = summarize_daily_stats(stats, "2026-11-03")
     assert "15" in result
     assert "25" in result
+
+
+def test_snapshot_dynamic_sport_breakdown(tmp_path):
+    act_dir = tmp_path / "activities"
+    act_dir.mkdir()
+    stats_dir = tmp_path / "stats"
+    stats_dir.mkdir()
+    for i, sport in enumerate(["hiking", "swimming", "hiking"]):
+        activity = {"summary": {"activityId": str(i), "activityName": sport.title(),
+                    "activityType": {"typeKey": sport}, "startTimeLocal": f"2026-10-{15+i} 08:00:00",
+                    "duration": 1800, "distance": 5000}}
+        (act_dir / f"{i}.json").write_text(json.dumps(activity))
+    result = build_context_snapshot(act_dir, stats_dir, days=30, today=date(2026, 10, 20))
+    assert "hiking" in result.lower()
+    assert "swimming" in result.lower()
+    assert "carrera" not in result
+    assert "fuerza" not in result
