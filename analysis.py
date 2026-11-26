@@ -165,15 +165,14 @@ def summarize_daily_stats(stats: dict, date_str: str, today: date | None = None)
     rhr = st.get("restingHeartRate")
     if rhr:
         lines.append(f"  FC reposo: {rhr} bpm")
-    steps = st.get("totalSteps")
-    step_goal = st.get("dailyStepGoal")
-    if steps is not None:
-        step_text = f"  Pasos: {steps:,}"
-        if step_goal:
-            step_text += f" de {step_goal:,}"
-        if is_today:
-            step_text += " (parcial — acumulado hasta hora de sync)"
-        lines.append(step_text)
+    if not is_today:
+        steps = st.get("totalSteps")
+        step_goal = st.get("dailyStepGoal")
+        if steps is not None:
+            step_text = f"  Pasos: {steps:,}"
+            if step_goal:
+                step_text += f" de {step_goal:,}"
+            lines.append(step_text)
     stress = st.get("averageStressLevel")
     if stress:
         lines.append(f"  Estrés promedio: {stress}")

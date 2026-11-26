@@ -133,13 +133,14 @@ def test_build_context_snapshot_combines_all(tmp_path):
     assert len(result) > 100
 
 
-def test_summarize_daily_stats_today_marks_steps_partial():
-    """Steps for the current day should be marked as partial."""
-    stats = {"stats": {"totalSteps": 80, "dailyStepGoal": 5000},
+def test_summarize_daily_stats_today_omits_steps():
+    """Steps for the current day should be omitted entirely — they're meaningless early in the day."""
+    stats = {"stats": {"totalSteps": 44, "dailyStepGoal": 5000},
              "sleep": {}, "training_readiness": [], "hrv": {}}
     result = summarize_daily_stats(stats, "2026-11-04", today=date(2026, 11, 4))
-    assert "parcial" in result.lower()
-    assert "80" in result
+    assert "pasos" not in result.lower()
+    assert "44" not in result
+    assert "5,000" not in result and "5000" not in result
 
 
 def test_summarize_daily_stats_past_day_not_partial():

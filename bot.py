@@ -651,7 +651,7 @@ EVENING_REPORT_PROMPT = """Genera un reporte de cierre del día para el usuario.
 
 Analiza su actividad del día de hoy e incluye:
 1. **Actividad realizada**: ¿Entrenó hoy? Si sí, resumen breve (tipo, duración, intensidad, FC)
-2. **Pasos del día**: Evalúa contra su meta de Garmin (viene en los datos como "de X"). Si los datos de hoy dicen "parcial", ignóralos para pasos — usa los de ayer como referencia
+2. **Pasos del día**: Los pasos de hoy no aparecen en los datos (se omiten por ser parciales). Usa los pasos de ayer como referencia para evaluar contra la meta
 3. **Cumplimiento del plan**: ¿Hizo lo que tenía programado según su plan semanal?
 
 {plan_section}
