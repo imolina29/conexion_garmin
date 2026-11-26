@@ -167,3 +167,47 @@ def test_summarize_daily_stats_no_today_param_backward_compat():
     result = summarize_daily_stats(stats, "2026-11-04")
     assert "parcial" not in result.lower()
     assert "80" in result
+
+
+def test_today_uses_bb_most_recent():
+    """Today should show bodyBatteryMostRecentValue, not 0→0 high/low."""
+    stats = {"stats": {"bodyBatteryHighestValue": 0, "bodyBatteryLowestValue": 0,
+                        "bodyBatteryMostRecentValue": 72, "bodyBatteryAtWakeTime": 85},
+             "sleep": {}, "training_readiness": [], "hrv": {}}
+    result = summarize_daily_stats(stats, "2026-11-04", today=date(2026, 11, 4))
+    assert "72" in result
+    assert "0 →" not in result
+
+
+def test_today_omits_meaningless_stress():
+    """Stress average at 7am is meaningless — omit for today."""
+    stats = {"stats": {"averageStressLevel": 2},
+             "sleep": {}, "training_readiness": [], "hrv": {}}
+    result = summarize_daily_stats(stats, "2026-11-04", today=date(2026, 11, 4))
+    assert "estrés" not in result.lower()
+
+
+def test_past_day_shows_full_bb_range():
+    """Past days should show the full low→high BB range."""
+    stats = {"stats": {"bodyBatteryHighestValue": 90, "bodyBatteryLowestValue": 15},
+             "sleep": {}, "training_readiness": [], "hrv": {}}
+    result = summarize_daily_stats(stats, "2026-11-03", today=date(2026, 11, 4))
+    assert "15 → 90" in result
+
+
+def test_daily_stats_includes_spo2():
+    """SpO2 data should be included when available."""
+    stats = {"stats": {"averageSpo2": 95.0, "lowestSpo2": 89},
+             "sleep": {}, "training_readiness": [], "hrv": {}}
+    result = summarize_daily_stats(stats, "2026-11-03")
+    assert "95" in result
+    assert "89" in result
+
+
+def test_daily_stats_includes_intensity_minutes():
+    """Intensity minutes should be shown when available."""
+    stats = {"stats": {"moderateIntensityMinutes": 15, "vigorousIntensityMinutes": 25},
+             "sleep": {}, "training_readiness": [], "hrv": {}}
+    result = summarize_daily_stats(stats, "2026-11-03")
+    assert "15" in result
+    assert "25" in result

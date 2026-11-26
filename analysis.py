@@ -173,13 +173,42 @@ def summarize_daily_stats(stats: dict, date_str: str, today: date | None = None)
             if step_goal:
                 step_text += f" de {step_goal:,}"
             lines.append(step_text)
-    stress = st.get("averageStressLevel")
-    if stress:
-        lines.append(f"  Estrés promedio: {stress}")
-    bb_high = st.get("bodyBatteryHighestValue")
-    bb_low = st.get("bodyBatteryLowestValue")
-    if bb_high is not None and bb_low is not None:
-        lines.append(f"  Body Battery: {bb_low} → {bb_high}")
+
+    if not is_today:
+        stress = st.get("averageStressLevel")
+        if stress:
+            lines.append(f"  Estrés promedio: {stress}")
+
+    if is_today:
+        bb_current = st.get("bodyBatteryMostRecentValue")
+        bb_wake = st.get("bodyBatteryAtWakeTime")
+        if bb_wake:
+            lines.append(f"  BB al despertar: {bb_wake}")
+        if bb_current:
+            lines.append(f"  BB actual: {bb_current}")
+    else:
+        bb_high = st.get("bodyBatteryHighestValue")
+        bb_low = st.get("bodyBatteryLowestValue")
+        if bb_high is not None and bb_low is not None:
+            lines.append(f"  Body Battery: {bb_low} → {bb_high}")
+
+    avg_spo2 = st.get("averageSpo2")
+    low_spo2 = st.get("lowestSpo2")
+    if avg_spo2:
+        spo2_text = f"  SpO2: {avg_spo2:.0f}%"
+        if low_spo2:
+            spo2_text += f" (mín {low_spo2}%)"
+        lines.append(spo2_text)
+
+    moderate_min = st.get("moderateIntensityMinutes")
+    vigorous_min = st.get("vigorousIntensityMinutes")
+    if moderate_min or vigorous_min:
+        parts = []
+        if moderate_min:
+            parts.append(f"{moderate_min}m moderada")
+        if vigorous_min:
+            parts.append(f"{vigorous_min}m vigorosa")
+        lines.append(f"  Intensidad: {', '.join(parts)}")
 
     sleep = stats.get("sleep", {})
     daily_sleep = sleep.get("dailySleepDTO", {})
