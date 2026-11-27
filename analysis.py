@@ -288,6 +288,20 @@ def summarize_daily_stats(stats: dict, date_str: str, today: date | None = None)
     return "\n".join(lines)
 
 
+def is_morning_data_ready(stats: dict) -> bool:
+    st = stats.get("stats", {})
+    bb_wake = st.get("bodyBatteryAtWakeTime")
+    if not bb_wake:
+        return False
+    sleep = stats.get("sleep", {})
+    daily_sleep = sleep.get("dailySleepDTO", {})
+    scores = daily_sleep.get("sleepScores", {})
+    overall = scores.get("overall", {})
+    if not overall.get("value"):
+        return False
+    return True
+
+
 def summarize_performance_metrics(perf: dict) -> str:
     if not perf:
         return ""

@@ -2,6 +2,7 @@
 """Multi-user Telegram bot — Garmin training coach powered by Gemini."""
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -14,7 +15,7 @@ from google import genai
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
-from analysis import build_context_snapshot
+from analysis import build_context_snapshot, is_morning_data_ready
 from calendar_server import parse_plan_json, plan_start_date, start_calendar_server
 from sync import create_client, sync_activities, sync_daily_stats, sync_performance_metrics
 from users import UserManager
@@ -203,6 +204,7 @@ Tu personalidad:
 - El usuario puede decirte antes de entrenar qué planea hacer — recuérdalo para cuando pregunte después cómo le fue
 
 ## Instrucciones
+- REGLA CRÍTICA: Cita SIEMPRE los números EXACTOS que aparecen en los datos del usuario. NUNCA aproximes, redondees ni inventes valores. Si el Sleep Score es 83, di 83 — no 80 ni "alrededor de 80". Si el Body Battery es 70, di 70 — no 72 ni "cerca de 70"
 - Responde basándote en los datos reales mostrados arriba
 - Si el usuario pregunta por una métrica, explica qué es Y qué significa su valor específico
 - Detecta tendencias: ¿está mejorando, estancado, o empeorando? Sé explícito sobre cuál es
@@ -651,6 +653,8 @@ Analiza sus datos de sueño y recuperación de anoche e incluye:
 
 {plan_section}
 
+IMPORTANTE: Usa los valores EXACTOS del snapshot — no aproximes ni redondees ningún número.
+
 Formato: breve y directo (máximo 200 palabras). No repitas los nombres de las métricas en extenso,
 usa abreviaturas después de la primera mención. Sé crítico — si durmió mal, dilo claro.
 Termina con una recomendación concreta de qué hacer hoy."""
@@ -663,6 +667,8 @@ Analiza su actividad del día de hoy e incluye:
 3. **Cumplimiento del plan**: ¿Hizo lo que tenía programado según su plan semanal?
 
 {plan_section}
+
+IMPORTANTE: Usa los valores EXACTOS del snapshot — no aproximes ni redondees ningún número.
 
 Formato: breve y directo (máximo 200 palabras). Si no entrenó cuando debía, señálalo.
 Si entrenó bien, reconócelo pero agrega qué podría mejorar.
@@ -706,6 +712,9 @@ def _today_plan_section(user_id: int) -> str:
     return f"Hoy es {dias[today_weekday]} — día libre según su plan (sin sesión programada)."
 
 
+MORNING_DATA_RETRY_DELAY = 120
+
+
 async def generate_and_send_report(bot, user_id: int, report_type: str) -> None:
     logger.info("Generating %s report for user %d", report_type, user_id)
 
@@ -714,12 +723,26 @@ async def generate_and_send_report(bot, user_id: int, report_type: str) -> None:
     if not synced:
         logger.warning("Sync failed for %s report, user %d — using cached data", report_type, user_id)
 
+    if report_type == "morning" and synced:
+        user_tz = ZoneInfo(user_manager.get_timezone(user_id))
+        today_str = user_today(user_tz).isoformat()
+        stats_file = user_manager.stats_dir(user_id) / f"{today_str}.json"
+        if stats_file.exists():
+            today_stats = json.loads(stats_file.read_text())
+            if not is_morning_data_ready(today_stats):
+                logger.info("Morning data incomplete for user %d, retrying in %ds", user_id, MORNING_DATA_RETRY_DELAY)
+                await asyncio.sleep(MORNING_DATA_RETRY_DELAY)
+                last_sync.pop(user_id, None)
+                run_sync_safe(user_id)
+
     snapshot = build_context_snapshot(
         user_manager.activities_dir(user_id),
         user_manager.stats_dir(user_id),
         days=7,
         today=user_today(ZoneInfo(user_manager.get_timezone(user_id))),
     )
+    logger.debug("Snapshot for %s report, user %d:\n%s", report_type, user_id, snapshot)
+
     profile = user_manager.get_profile(user_id)
     user_tz = ZoneInfo(user_manager.get_timezone(user_id))
     system_prompt = build_system_prompt(snapshot, profile, tz=user_tz)

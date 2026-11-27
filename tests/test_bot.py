@@ -596,3 +596,137 @@ def test_cmd_cancelar_no_active_flow(tmp_path, monkeypatch):
     asyncio.run(cmd_cancelar(update, ctx))
 
     update.message.reply_text.assert_called_once()
+
+
+# --- Fix: exact numbers instruction + data completeness + snapshot logging ---
+
+
+def test_build_system_prompt_requires_exact_numbers():
+    """System prompt must instruct Gemini to cite exact numbers from the snapshot."""
+    result = build_system_prompt("datos de test", "perfil")
+    assert "EXACTOS" in result or "exactos" in result
+
+
+def test_morning_report_prompt_requires_exact_numbers():
+    """Morning report prompt must instruct to cite exact values."""
+    from bot import MORNING_REPORT_PROMPT
+    assert "exacto" in MORNING_REPORT_PROMPT.lower()
+
+
+def test_evening_report_prompt_requires_exact_numbers():
+    """Evening report prompt must instruct to cite exact values."""
+    from bot import EVENING_REPORT_PROMPT
+    assert "exacto" in EVENING_REPORT_PROMPT.lower()
+
+
+def test_is_morning_data_ready_missing_sleep():
+    """Data without sleep score is not ready for morning report."""
+    from analysis import is_morning_data_ready
+    stats = {"stats": {"bodyBatteryAtWakeTime": 0}, "sleep": {}, "training_readiness": [], "hrv": {}}
+    assert is_morning_data_ready(stats) is False
+
+
+def test_is_morning_data_ready_missing_bb_wake():
+    """Data without bodyBatteryAtWakeTime is not ready."""
+    from analysis import is_morning_data_ready
+    stats = {
+        "stats": {},
+        "sleep": {"dailySleepDTO": {"sleepScores": {"overall": {"value": 83}}}},
+        "training_readiness": [{"score": 65}],
+        "hrv": {},
+    }
+    assert is_morning_data_ready(stats) is False
+
+
+def test_is_morning_data_ready_complete():
+    """Data with sleep score and BB at wake is ready."""
+    from analysis import is_morning_data_ready
+    stats = {
+        "stats": {"bodyBatteryAtWakeTime": 70},
+        "sleep": {"dailySleepDTO": {"sleepScores": {"overall": {"value": 83}}}},
+        "training_readiness": [{"score": 65}],
+        "hrv": {},
+    }
+    assert is_morning_data_ready(stats) is True
+
+
+def test_is_morning_data_ready_bb_zero_is_not_ready():
+    """BB at wake = 0 means Garmin hasn't calculated it yet."""
+    from analysis import is_morning_data_ready
+    stats = {
+        "stats": {"bodyBatteryAtWakeTime": 0},
+        "sleep": {"dailySleepDTO": {"sleepScores": {"overall": {"value": 83}}}},
+        "training_readiness": [{"score": 65}],
+        "hrv": {},
+    }
+    assert is_morning_data_ready(stats) is False
+
+
+def test_generate_report_logs_snapshot(monkeypatch, tmp_path, caplog):
+    """generate_and_send_report must log the snapshot sent to Gemini."""
+    import bot
+    import logging
+    mgr = UserManager(users_dir=tmp_path)
+    mgr.create_user(42, "a@b.com", "pw")
+    monkeypatch.setattr(bot, "user_manager", mgr)
+    monkeypatch.setattr(bot, "last_sync", {})
+
+    def fake_sync(uid):
+        return True
+    monkeypatch.setattr(bot, "run_sync_safe", fake_sync)
+    monkeypatch.setattr(bot, "build_context_snapshot", lambda *a, **kw: "SNAPSHOT_TEST_DATA")
+    monkeypatch.setattr(bot, "call_gemini", lambda sys, usr: "reporte generado")
+
+    mock_bot = MagicMock()
+    mock_bot.send_message = AsyncMock()
+
+    with caplog.at_level(logging.DEBUG, logger="bot"):
+        asyncio.run(bot.generate_and_send_report(mock_bot, 42, "morning"))
+
+    assert any("SNAPSHOT_TEST_DATA" in r.message for r in caplog.records)
+
+
+def test_morning_report_retries_sync_when_data_incomplete(monkeypatch, tmp_path):
+    """Morning report re-syncs once if today's data is incomplete (BB=0, no sleep)."""
+    import json
+    import bot
+
+    mgr = UserManager(users_dir=tmp_path)
+    mgr.create_user(42, "a@b.com", "pw")
+    monkeypatch.setattr(bot, "user_manager", mgr)
+    monkeypatch.setattr(bot, "last_sync", {})
+
+    stats_dir = mgr.stats_dir(42)
+    stats_dir.mkdir(parents=True, exist_ok=True)
+
+    incomplete_stats = {"stats": {"bodyBatteryAtWakeTime": 0}, "sleep": {}, "training_readiness": [], "hrv": {}}
+    complete_stats = {
+        "stats": {"bodyBatteryAtWakeTime": 70, "bodyBatteryMostRecentValue": 68},
+        "sleep": {"dailySleepDTO": {"sleepScores": {"overall": {"value": 83}}}},
+        "training_readiness": [{"score": 65}],
+        "hrv": {},
+    }
+
+    sync_call_count = 0
+    today_str = bot.user_today(ZoneInfo("America/Bogota")).isoformat()
+    stats_file = stats_dir / f"{today_str}.json"
+
+    def fake_sync(uid):
+        nonlocal sync_call_count
+        sync_call_count += 1
+        if sync_call_count >= 2:
+            stats_file.write_text(json.dumps(complete_stats))
+        else:
+            stats_file.write_text(json.dumps(incomplete_stats))
+        return True
+
+    monkeypatch.setattr(bot, "run_sync_safe", fake_sync)
+    monkeypatch.setattr(bot, "call_gemini", lambda sys, usr: "reporte generado")
+    monkeypatch.setattr(bot, "MORNING_DATA_RETRY_DELAY", 0)
+
+    mock_bot = MagicMock()
+    mock_bot.send_message = AsyncMock()
+
+    asyncio.run(bot.generate_and_send_report(mock_bot, 42, "morning"))
+
+    assert sync_call_count >= 2, f"Expected re-sync, but sync was called {sync_call_count} time(s)"
