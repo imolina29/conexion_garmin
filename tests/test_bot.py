@@ -607,16 +607,16 @@ def test_build_system_prompt_requires_exact_numbers():
     assert "EXACTOS" in result or "exactos" in result
 
 
-def test_morning_report_prompt_requires_exact_numbers():
-    """Morning report prompt must instruct to cite exact values."""
+def test_morning_report_prompt_forbids_citing_numbers():
+    """Morning report prompt must tell Gemini NOT to cite numbers."""
     from bot import MORNING_REPORT_PROMPT
-    assert "exacto" in MORNING_REPORT_PROMPT.lower()
+    assert "no repitas" in MORNING_REPORT_PROMPT.lower() or "no cites" in MORNING_REPORT_PROMPT.lower()
 
 
-def test_evening_report_prompt_requires_exact_numbers():
-    """Evening report prompt must instruct to cite exact values."""
+def test_evening_report_prompt_forbids_citing_numbers():
+    """Evening report prompt must tell Gemini NOT to cite numbers."""
     from bot import EVENING_REPORT_PROMPT
-    assert "exacto" in EVENING_REPORT_PROMPT.lower()
+    assert "no repitas" in EVENING_REPORT_PROMPT.lower() or "no cites" in EVENING_REPORT_PROMPT.lower()
 
 
 def test_is_morning_data_ready_missing_sleep():
@@ -730,3 +730,41 @@ def test_morning_report_retries_sync_when_data_incomplete(monkeypatch, tmp_path)
     asyncio.run(bot.generate_and_send_report(mock_bot, 42, "morning"))
 
     assert sync_call_count >= 2, f"Expected re-sync, but sync was called {sync_call_count} time(s)"
+
+
+def test_generate_report_message_has_data_card_and_analysis(monkeypatch, tmp_path):
+    """Final message must contain code-generated data card followed by Gemini analysis."""
+    import json
+    import bot
+
+    mgr = UserManager(users_dir=tmp_path)
+    mgr.create_user(42, "a@b.com", "pw")
+    monkeypatch.setattr(bot, "user_manager", mgr)
+    monkeypatch.setattr(bot, "last_sync", {})
+
+    stats_dir = mgr.stats_dir(42)
+    stats_dir.mkdir(parents=True, exist_ok=True)
+    today_str = bot.user_today(ZoneInfo("America/Bogota")).isoformat()
+    stats = {
+        "stats": {"restingHeartRate": 52, "bodyBatteryAtWakeTime": 70, "bodyBatteryMostRecentValue": 68},
+        "sleep": {"dailySleepDTO": {"sleepScores": {"overall": {"value": 83, "qualifierKey": "GOOD"}}}},
+        "training_readiness": [{"score": 82, "level": "HIGH"}],
+        "hrv": {},
+    }
+    (stats_dir / f"{today_str}.json").write_text(json.dumps(stats))
+
+    monkeypatch.setattr(bot, "run_sync_safe", lambda uid: True)
+    monkeypatch.setattr(bot, "call_gemini", lambda sys, usr: "Análisis de Gemini aquí.")
+
+    mock_bot = MagicMock()
+    mock_bot.send_message = AsyncMock()
+
+    asyncio.run(bot.generate_and_send_report(mock_bot, 42, "morning"))
+
+    sent_text = mock_bot.send_message.call_args[1]["text"]
+    assert "📊 Datos verificados:" in sent_text
+    assert "52 bpm" in sent_text
+    assert "83" in sent_text
+    assert "---" in sent_text
+    assert "🤖 Análisis:" in sent_text
+    assert "Análisis de Gemini aquí." in sent_text

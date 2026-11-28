@@ -133,7 +133,7 @@ def summarize_activity(activity: dict) -> str:
 
     te_aero = s.get("aerobicTrainingEffect")
     if te_aero:
-        lines.append(f"  Training Effect: {te_aero}")
+        lines.append(f"  Training Effect: {round(te_aero, 1)}")
     load = s.get("activityTrainingLoad")
     if load:
         lines.append(f"  Training Load: {round(load, 1)}")
@@ -353,6 +353,34 @@ def summarize_performance_metrics(perf: dict) -> str:
     if not lines:
         return ""
     return "## MÉTRICAS DE RENDIMIENTO\n" + "\n".join(lines)
+
+
+def build_report_data_card(
+    stats_dir: Path, activities_dir: Path, today: date, report_type: str,
+) -> str:
+    today_str = today.isoformat()
+    lines = []
+
+    stats_file = stats_dir / f"{today_str}.json"
+    if stats_file.exists():
+        stats = json.loads(stats_file.read_text())
+        lines.append(summarize_daily_stats(stats, today_str, today=today))
+    else:
+        lines.append(f"📅 {today_str}\n  Sin datos disponibles para hoy.")
+
+    if report_type == "evening":
+        activities = load_activities(activities_dir)
+        today_acts = [a for a in activities
+                      if (a.get("summary", {}).get("startTimeLocal") or "")[:10] == today_str]
+        if today_acts:
+            lines.append("")
+            lines.append("🏋️ Actividades de hoy:")
+            for a in today_acts:
+                lines.append(summarize_activity(a))
+        else:
+            lines.append("\n🏋️ Actividades de hoy: ninguna registrada.")
+
+    return "\n".join(lines)
 
 
 def build_context_snapshot(activities_dir: Path, stats_dir: Path, days: int = 30, today: date | None = None) -> str:

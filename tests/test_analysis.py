@@ -8,6 +8,7 @@ from analysis import (
     summarize_daily_stats,
     summarize_performance_metrics,
     build_context_snapshot,
+    build_report_data_card,
 )
 
 
@@ -292,3 +293,54 @@ def test_snapshot_includes_sport_profile(tmp_path):
     assert "PERFIL DEPORTIVO" in result
     assert "running" in result.lower()
     assert "strength" in result.lower()
+
+
+def test_data_card_morning_includes_stats(tmp_path):
+    act_dir = tmp_path / "activities"
+    act_dir.mkdir()
+    stats_dir = tmp_path / "stats"
+    stats_dir.mkdir()
+    stats = {
+        "stats": {"restingHeartRate": 52, "bodyBatteryAtWakeTime": 70, "bodyBatteryMostRecentValue": 68},
+        "sleep": {"dailySleepDTO": {"sleepTimeSeconds": 24660,
+                  "sleepScores": {"overall": {"value": 83, "qualifierKey": "GOOD"}}}},
+        "training_readiness": [{"score": 82, "level": "HIGH"}],
+        "hrv": {"hrvSummary": {"lastNightAvg": 57, "weeklyAvg": 57, "status": "UNBALANCED"}},
+    }
+    (stats_dir / "2026-11-27.json").write_text(json.dumps(stats))
+    result = build_report_data_card(stats_dir, act_dir, date(2026, 11, 27), "morning")
+    assert "52 bpm" in result
+    assert "83" in result
+    assert "70" in result
+    assert "57" in result
+    assert "actividad" not in result.lower()
+
+
+def test_data_card_evening_includes_activity(tmp_path):
+    act_dir = tmp_path / "activities"
+    act_dir.mkdir()
+    stats_dir = tmp_path / "stats"
+    stats_dir.mkdir()
+    stats = {"stats": {"restingHeartRate": 52}, "sleep": {}, "training_readiness": [], "hrv": {}}
+    (stats_dir / "2026-11-27.json").write_text(json.dumps(stats))
+    activity = {"summary": {"activityId": "1", "activityName": "Fuerza",
+                "activityType": {"typeKey": "strength_training"}, "startTimeLocal": "2026-11-27 19:48:50",
+                "duration": 4752, "averageHR": 112, "maxHR": 163, "calories": 381,
+                "totalSets": 19, "totalReps": 261},
+                "hr_zones": [], "splits": {}, "laps": {}, "exercise_sets": {}}
+    (act_dir / "1.json").write_text(json.dumps(activity))
+    result = build_report_data_card(stats_dir, act_dir, date(2026, 11, 27), "evening")
+    assert "Fuerza" in result
+    assert "261" in result
+    assert "163" in result
+
+
+def test_data_card_evening_no_activity(tmp_path):
+    act_dir = tmp_path / "activities"
+    act_dir.mkdir()
+    stats_dir = tmp_path / "stats"
+    stats_dir.mkdir()
+    stats = {"stats": {"restingHeartRate": 52}, "sleep": {}, "training_readiness": [], "hrv": {}}
+    (stats_dir / "2026-11-27.json").write_text(json.dumps(stats))
+    result = build_report_data_card(stats_dir, act_dir, date(2026, 11, 27), "evening")
+    assert "ninguna" in result.lower()

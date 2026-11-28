@@ -15,7 +15,7 @@ from google import genai
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
-from analysis import build_context_snapshot, is_morning_data_ready
+from analysis import build_context_snapshot, build_report_data_card, is_morning_data_ready
 from calendar_server import parse_plan_json, plan_start_date, start_calendar_server
 from sync import create_client, sync_activities, sync_daily_stats, sync_performance_metrics
 from users import UserManager
@@ -644,35 +644,35 @@ Reglas para el JSON:
 """
 
 
-MORNING_REPORT_PROMPT = """Genera un reporte matutino breve para el usuario.
+MORNING_REPORT_PROMPT = """Genera un análisis matutino de recuperación y sueño para el usuario.
 
-Analiza sus datos de sueño y recuperación de anoche e incluye:
-1. **Calidad de sueño**: Sleep Score, duración, fases (profundo, REM, ligero)
-2. **Estado de recuperación**: Training Readiness, HRV, Body Battery al despertar, FC en reposo
-3. **Recomendación para hoy**: Basándote en las métricas, ¿debería entrenar fuerte, moderado, o descansar?
+El usuario ya tiene los datos exactos visibles arriba de tu análisis. Tu trabajo es SOLO interpretar y recomendar.
 
-{plan_section}
+REGLA ABSOLUTA: NO repitas, cites ni menciones ningún número del snapshot. Los datos ya están visibles para el usuario. Si necesitas referirte a una métrica, hazlo por nombre sin el valor (ejemplo: di "tu sueño profundo está bajo" en vez de "tu sueño profundo fue de 25%").
 
-IMPORTANTE: Usa los valores EXACTOS del snapshot — no aproximes ni redondees ningún número.
-
-Formato: breve y directo (máximo 200 palabras). No repitas los nombres de las métricas en extenso,
-usa abreviaturas después de la primera mención. Sé crítico — si durmió mal, dilo claro.
-Termina con una recomendación concreta de qué hacer hoy."""
-
-EVENING_REPORT_PROMPT = """Genera un reporte de cierre del día para el usuario.
-
-Analiza su actividad del día de hoy e incluye:
-1. **Actividad realizada**: ¿Entrenó hoy? Si sí, resumen breve (tipo, duración, intensidad, FC)
-2. **Pasos del día**: Evalúa los pasos del día contra la meta si aparecen en los datos
-3. **Cumplimiento del plan**: ¿Hizo lo que tenía programado según su plan semanal?
+Escribe:
+1. Evaluación de la calidad de sueño — qué estuvo bien, qué faltó
+2. Estado de recuperación — ¿listo para entrenar o necesita descanso?
+3. Recomendación concreta para hoy
 
 {plan_section}
 
-IMPORTANTE: Usa los valores EXACTOS del snapshot — no aproximes ni redondees ningún número.
+Formato: breve y directo (máximo 150 palabras). Sé crítico."""
 
-Formato: breve y directo (máximo 200 palabras). Si no entrenó cuando debía, señálalo.
-Si entrenó bien, reconócelo pero agrega qué podría mejorar.
-Termina con un dato o consejo para mañana."""
+EVENING_REPORT_PROMPT = """Genera un análisis de cierre del día para el usuario.
+
+El usuario ya tiene los datos exactos visibles arriba de tu análisis. Tu trabajo es SOLO interpretar y recomendar.
+
+REGLA ABSOLUTA: NO repitas, cites ni menciones ningún número del snapshot. Los datos ya están visibles para el usuario. Si necesitas referirte a una métrica, hazlo por nombre sin el valor (ejemplo: di "la carga de entrenamiento fue baja" en vez de "la carga fue de 14.8").
+
+Escribe:
+1. Evaluación de la sesión de hoy (si hubo actividad) — qué estuvo bien, qué no
+2. Estado general de recuperación — tendencias preocupantes o positivas
+3. Recomendación concreta para mañana
+
+{plan_section}
+
+Formato: breve y directo (máximo 150 palabras). Sé crítico."""
 
 GEMINI_MODELS = ["gemini-3.1-flash-lite", "gemini-3.1-flash", "gemini-2.0-flash"]
 
@@ -723,9 +723,11 @@ async def generate_and_send_report(bot, user_id: int, report_type: str) -> None:
     if not synced:
         logger.warning("Sync failed for %s report, user %d — using cached data", report_type, user_id)
 
+    user_tz = ZoneInfo(user_manager.get_timezone(user_id))
+    today = user_today(user_tz)
+
     if report_type == "morning" and synced:
-        user_tz = ZoneInfo(user_manager.get_timezone(user_id))
-        today_str = user_today(user_tz).isoformat()
+        today_str = today.isoformat()
         stats_file = user_manager.stats_dir(user_id) / f"{today_str}.json"
         if stats_file.exists():
             today_stats = json.loads(stats_file.read_text())
@@ -735,16 +737,22 @@ async def generate_and_send_report(bot, user_id: int, report_type: str) -> None:
                 last_sync.pop(user_id, None)
                 run_sync_safe(user_id)
 
+    data_card = build_report_data_card(
+        user_manager.stats_dir(user_id),
+        user_manager.activities_dir(user_id),
+        today,
+        report_type,
+    )
+
     snapshot = build_context_snapshot(
         user_manager.activities_dir(user_id),
         user_manager.stats_dir(user_id),
         days=7,
-        today=user_today(ZoneInfo(user_manager.get_timezone(user_id))),
+        today=today,
     )
     logger.debug("Snapshot for %s report, user %d:\n%s", report_type, user_id, snapshot)
 
     profile = user_manager.get_profile(user_id)
-    user_tz = ZoneInfo(user_manager.get_timezone(user_id))
     system_prompt = build_system_prompt(snapshot, profile, tz=user_tz)
 
     plan_section = _today_plan_section(user_id)
@@ -759,8 +767,9 @@ async def generate_and_send_report(bot, user_id: int, report_type: str) -> None:
         raise RuntimeError("Gemini no respondió")
 
     header = "🌅 Reporte Matutino" if report_type == "morning" else "🌙 Reporte Nocturno"
-    await bot.send_message(chat_id=user_id, text=f"{header}\n\n{reply}")
-    logger.info("Sent %s report to user %d (%d chars)", report_type, user_id, len(reply))
+    message = f"{header}\n\n📊 Datos verificados:\n{data_card}\n\n---\n\n🤖 Análisis:\n{reply}"
+    await bot.send_message(chat_id=user_id, text=message)
+    logger.info("Sent %s report to user %d (%d chars)", report_type, user_id, len(message))
 
 
 async def send_daily_report(context: ContextTypes.DEFAULT_TYPE, report_type: str) -> None:
